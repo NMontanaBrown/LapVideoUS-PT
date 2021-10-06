@@ -4,8 +4,8 @@
 
 
 import argparse
-from lapvideous-pt import __version__
-from lapvideous-pt.ui.lapvideous-pt_demo import run_demo
+from lapvideous_pt import __version__
+from lapvideous_pt.ui.lapvideous_pt_demo import run_demo
 
 
 def main(args=None):

@@ -2,11 +2,11 @@
 
 """LapVideoUS-PT tests"""
 
-from lapvideous-pt.ui.lapvideous-pt_demo import run_demo
-from lapvideous-pt.algorithms import addition, multiplication
+from lapvideous_pt.ui.lapvideous_pt_demo import run_demo
+from lapvideous_pt.algorithms import addition, multiplication
 
 # Pytest style
-def test_using_pytest_lapvideous-pt():
+def test_using_pytest_lapvideous_pt():
     """First test"""
     #pylint:disable=invalid-name
     x = 1

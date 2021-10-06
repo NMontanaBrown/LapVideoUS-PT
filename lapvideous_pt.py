@@ -2,7 +2,7 @@
 #  -*- coding: utf-8 -*-
 import sys
 
-from lapvideous-pt.ui.lapvideous-pt_command_line import main
+from lapvideous_pt.ui.lapvideous_pt_command_line import main
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))

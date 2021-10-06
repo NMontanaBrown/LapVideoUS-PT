@@ -1,7 +1,7 @@
 # coding=utf-8
 
 """Hello world demo module"""
-from lapvideous-pt.algorithms import addition, multiplication
+from lapvideous_pt.algorithms import addition, multiplication
 
 def run_demo(input_x, input_y, multiply, verbose):
     """ Run the application """

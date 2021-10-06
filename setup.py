@@ -19,7 +19,7 @@ setup(
     long_description_content_type='text/x-rst',
     url='https://weisslab.cs.ucl.ac.uk/COMPASS/software/LapVideoUS-PT',
     author='Nina Montana Brown',
-    author_email='YOUR-EMAIL@ucl.ac.uk',
+    author_email='nina.brown.15@ucl.ac.uk',
     license='BSD-3 license',
     classifiers=[
         'Development Status :: 3 - Alpha',
@@ -57,7 +57,7 @@ setup(
 
     entry_points={
         'console_scripts': [
-            'lapvideous-pt=lapvideous-pt.__main__:main',
+            'lapvideous_pt=lapvideous_pt.__main__:main',
         ],
     },
 )

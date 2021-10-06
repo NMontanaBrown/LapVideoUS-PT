@@ -1,0 +1,4 @@
+# This file lists the python packages that are required to run tests with
+# integration to the susi code, on CPU.
+-r requirements-dev.txt
+git+https://weisslab.cs.ucl.ac.uk/UltrasoundNoTracker/slicesampler

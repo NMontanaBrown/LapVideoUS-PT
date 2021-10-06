@@ -31,8 +31,8 @@ LapVideoUS-PT is currently a demo project, which will add/multiply two numbers. 
 
 ::
 
-    python lapvideous-pt.py 5 8
-    python lapvideous-pt.py 3 6 --multiply
+    python lapvideous_pt.py 5 8
+    python lapvideous_pt.py 3 6 --multiply
 
 Please explore the project structure, and implement your own functionality.
 
@@ -66,7 +66,7 @@ This code conforms to the PEP8 standard. Pylint can be used to analyse the code:
 ::
 
     pip install pylint
-    pylint --rcfile=tests/pylintrc lapvideous-pt
+    pylint --rcfile=tests/pylintrc lapvideous_pt
 
 
 Installing
