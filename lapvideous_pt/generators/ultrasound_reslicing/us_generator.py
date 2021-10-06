@@ -82,7 +82,7 @@ def generate_cartesian_grid(im_x_size,
     :param im_x_res: float, pixel x resolution
     :param im_y_res: float, pixel y resolution
     :param batch: int, batch size for generation.
-    :return: [coordinates, tf.Tensor [B, Y, X, 1, 4]
+    :return: [coordinates, torch.Tensor [B, Y, X, 1, 4]
               shape_planes, list [B, Y, X, 1, 4]
               shape_coords, list [B, Y, X, 1, 3]]
     """
@@ -102,9 +102,9 @@ def generate_cartesian_grid(im_x_size,
 def planes_to_coordinates(coordinates, shape_planes, matrices):
     """
     Project planes into cartesian space based on poses
-    :param coordinates: tf Tensor
+    :param coordinates: torch.Tensor
     :param shape_planes: list
-    :param matrices: tf Tensor
+    :param matrices: torch.Tensor
     :return: [coordinates [B], coordinates_planes]
     """
     # Reshape into (1, C, 4) matrix
@@ -129,11 +129,11 @@ def generate_volume_coordinates(voxel_res,
     Generate the volume voxel indices corresponding to
     calculated plane coordinates from a pose.
 
-    :param voxel_res: tf.Tensor, [3]
-    :param origin_volume: tf.Tensor, [3]
-    :param coordinates_planes: tf.Tensor, [B, N, M, 1, 4]
+    :param voxel_res: torch.Tensor, [3]
+    :param origin_volume: torch.Tensor, [3]
+    :param coordinates_planes: torch.Tensor, [B, N, M, 1, 4]
     :param shape_planes: shape of planes, [B, N, M, 1, 4]
-    :return: voxel_locs, tf.Tensor, [B, N, M, 1, 3]
+    :return: voxel_locs, torch.Tensor, [B, N, M, 1, 3]
     """
     # getting rid of the homogenous part
     xyz_planes, _ = torch.split(coordinates_planes, [3, 1], -1) # [B, N, M, 1, 3]
