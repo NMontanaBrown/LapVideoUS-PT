@@ -12,8 +12,6 @@ import scipy.io as sio
 import matplotlib.pyplot as plt
 import torch
 
-
-
 def generate_us_simulation_tensor(dict_arrays_slicesampler, voxel_size, keys=None, vol_type="multiclass"):
     """
     Generates a np.array of combined tensors from a slicesampler dictionary.
@@ -169,60 +167,3 @@ def normalise_voxel_locs(voxel_locs, shape_planes, grid_size):
     voxel_locs_norm = torch.divide(torch.subtract(voxel_locs, grid_size_half), grid_size_half) # [3]
 
     return voxel_locs_norm # [B, M, N, 1, 3]
-
-
-
-### Test
-key_word = "multi"
-path_non_centered_vtk = os.path.abspath("/Users/nmont/PhD/ClinicalData/Data/DataSeg/VTK/2018-06-15_i4i_HLR_01/")
-files = os.listdir(path_non_centered_vtk)
-full_files = [os.path.join(path_non_centered_vtk, file) for file in files]
-
-origin_file = [file for file in full_files if ("origin" in file) and (key_word in file)]
-image_dim_file = [file for file in full_files if ("imdim" in file) and (key_word in file)]
-volume_file = [file for file in full_files if ("channel_tensor.npy" in file) and (key_word in file)]
-pixel_file = [file for file in full_files if ("pixdim" in file) and (key_word in file)]
-
-# Known pose
-
-path_GT_poses = "/Users/nmont/PhD/ClinicalData/Data/GT_Registrations/2018-06-15_i4i_HLR_01/2018.06.15_11-35-55-029_RightLobe"
-path_non_centered_vtk = os.path.abspath("/Users/nmont/PhD/ClinicalData/Data/DataSeg/VTK/2018-06-15_i4i_HLR_01/")
-folder_pose = '/poses/pose1/'
-path_json =  os.path.abspath("/Users/nmont/PhD/ClinicalData/LapVideoUS/H01"+folder_pose)
-model_lus_json = os.path.join(path_json, 'models_lus.json')
-model_lus_non_centered = os.path.join(path_json, 'models_lus_non_centered.json')
-pose_file = '/pose_651.txt'
-
-pose_orig = np.loadtxt(path_GT_poses+pose_file, delimiter=',')
-origin = np.load(origin_file[0])
-volume = np.load(volume_file[0])
-image_dim = np.load(image_dim_file[0])
-pixel_size=np.load(pixel_file[0])
-
-coordinates_orig, shape_planes, shape_coords = generate_cartesian_grid(im_x_size=image_dim[0],
-                                                                        im_y_size=image_dim[1],
-                                                                        im_x_res=pixel_size[0],
-                                                                        im_y_res=pixel_size[1],
-                                                                        batch=1,)
-
-coordinates, coordinates_planes = planes_to_coordinates(torch.as_tensor(coordinates_orig, dtype=torch.float32),
-                                                        shape_planes,
-                                                        matrices=torch.as_tensor(pose_orig, dtype=torch.float32))
-
-# Voxel locs [B, M, N, 1, 3]
-voxel_locs = generate_volume_coordinates(voxel_res=torch.as_tensor([0.5, 0.5, 0.5], dtype=torch.float32),
-                                        origin_volume=torch.as_tensor([origin[0], origin[1], origin[2]],dtype=torch.float32),
-                                        coordinates_planes=coordinates_planes,
-                                        shape_planes=shape_planes)
-
-voxel_locs_norm = normalise_voxel_locs(voxel_locs, shape_planes, volume.shape[0:3])
-
-voxel_locs_norm = torch.transpose(torch.transpose(voxel_locs_norm, 1, 3), 2, 3)
-# Create volume tensor
-volume = torch.transpose(torch.transpose(torch.transpose(torch.transpose(torch.as_tensor(volume, dtype=torch.float32).expand(1, -1, -1, -1, -1), 4, 1), 4, 2), 2, 3), 4, 3)
-
-out_im = sample(volume, voxel_locs_norm)
-
-fig, axs = plt.subplots(nrows=1, ncols=1)
-axs.imshow(np.transpose(out_im.numpy()[0, :, 0, :, :], [1, 2, 0]))
-plt.show()
