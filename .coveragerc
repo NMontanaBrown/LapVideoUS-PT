@@ -1,0 +1,6 @@
+[run]
+omit = 
+        ./lapvideous-pt/_version.py
+        ./lapvideous-pt/__init__.py
+        ./lapvideous-pt/__main__.py
+        ./lapvideous-pt/ui/lapvideous-pt_command_line.py
