@@ -61,10 +61,10 @@ def opencv_to_opengl(matrix_R, matrix_T):
     T_pytorch3d= matrix_T.clone()
     R_pytorch3d[:, :, :2] *= -1
     T_pytorch3d[:, :2] *= -1
-
-    ones = torch.from_numpy(np.ones((1,4), np.float32)) # [1, 4]
+    eye = torch.eye(4, dtype=torch.float32) # Use last column
+    _, column = torch.split(eye, [3, 1])
     left_handed_M = torch.cat((R_pytorch3d, T_pytorch3d.expand(1, -1, -1,)), 1)
-    left_handed_M = torch.cat((left_handed_M, torch.transpose(ones.expand(1, -1, -1), 2, 1)), 2)
+    left_handed_M = torch.cat((left_handed_M, torch.transpose(column.expand(1, -1, -1), 2, 1)), 2)
     return left_handed_M, R_pytorch3d, T_pytorch3d
 
 def opengl_to_opencv(matrix_R, matrix_T):
@@ -85,6 +85,30 @@ def opengl_to_opencv(matrix_R, matrix_T):
     right_handed_M = torch.cat((R_openCV, T_openCV.expand(1, -1, -1,)), 1)
     right_handed_M = torch.cat((right_handed_M, torch.transpose(ones.expand(1, -1, -1), 2, 1)), 2)
     return right_handed_M, R_openCV, T_openCV
+
+def split_opengl_hom_matrix(matrix):
+    """
+    OpenGL/Pytorch3D format = [R 0,
+                               T 1]
+    Splits the matrix into R and T formats.
+    :param matrix: torch.Tensor, [N, 4, 4]
+    :return: [R, T]
+    """
+    r, t = torch.split(torch.split(matrix, [3, 1], 2)[0], [3, 1], 1)
+    t =  torch.squeeze(t, 1) # N, 3
+    return r, t
+
+def split_opencv_hom_matrix(matrix):
+    """
+    OpenCV format = [R T,
+                     0 1]
+    Splits the matrix into R and T formats.
+    :param matrix: torch.Tensor, [N, 4, 4]
+    :return: [R, T]
+    """
+    r, t = torch.split(torch.split(matrix, [3, 1], 1)[0], [3, 1], 2)
+    t =  torch.squeeze(t, 1) # N, 3
+    return r, t
 
 def p2l_2_slicesampler(pose):
     """
