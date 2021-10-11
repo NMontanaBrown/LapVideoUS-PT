@@ -198,6 +198,7 @@ def slice_volume(image_dim,
                  voxel_size,
                  origin,
                  volume,
+                 batch,
                  device):
     """
     Function to reslice a volume for a given pose in the
@@ -210,6 +211,7 @@ def slice_volume(image_dim,
     :param origin: like torch.Tensor, (3,)
     :param volume: torch.Tensor, (N, W, H, D, Ch), tensor of 3D
                    volumetric features.
+    :param batch: int, (N), batch size.
     :return: planes, torch.Tensor, (N, A, B) of resliced planes
              in tensor.
     """
@@ -217,7 +219,7 @@ def slice_volume(image_dim,
                                                                 im_y_size=image_dim[1],
                                                                 im_x_res=pixel_size[0],
                                                                 im_y_res=pixel_size[1],
-                                                                batch=1,
+                                                                batch=batch,
                                                                 device=device)
 
     _, coordinates_planes = planes_to_coordinates(torch.as_tensor(coordinates_orig, dtype=torch.float32, device=device),
@@ -236,5 +238,5 @@ def slice_volume(image_dim,
     # Create volume tensor
     volume = torch.transpose(torch.transpose(torch.transpose(torch.transpose(torch.as_tensor(volume, dtype=torch.float32, device=device).expand(1, -1, -1, -1, -1), 4, 1), 4, 2), 2, 3), 4, 3)
 
-    out_im = sample(volume, voxel_locs_norm)
+    out_im = sample(volume.repeat(batch, 1, 1, 1, 1), voxel_locs_norm)
     return out_im
