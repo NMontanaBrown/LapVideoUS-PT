@@ -85,7 +85,7 @@ class USTensorSlice():
                                                 image_num=1)
         dict_info = segmented_volume.binary_volumes
         image_vars = segmented_volume.image_variables
-        tensor, origin = lvusg.generate_us_simulation_tensor(dict_info, voxel_size, keys, vol_type)
+        tensor, origin, _ = lvusg.generate_us_simulation_tensor(dict_info, voxel_size, keys, vol_type)
         self.sim_tensor = tensor
         self.origin = origin
         self.image_dim = image_vars[2]
@@ -111,29 +111,8 @@ class USTensorSlice():
         _, binary_map_nc, _ =\
         seg_volume.simulate_image(poses=pose, image_num=1, out_points=True)
 
-        coordinates_orig, shape_planes, _ = lvusg.generate_cartesian_grid(im_x_size=self.image_dim[0],
-                                                                          im_y_size=self.image_dim[1],
-                                                                          im_x_res=self.pixel_size[0],
-                                                                          im_y_res=self.pixel_size[1],
-                                                                          batch=1,)
+        out_im = lvusg.slice_volume(self.image_dim, self.pixel_size, pose, self.voxel_size, self.origin, self.sim_tensor)
 
-        _, coordinates_planes = lvusg.planes_to_coordinates(torch.as_tensor(coordinates_orig, dtype=torch.float32),
-                                                            shape_planes,
-                                                            matrices=torch.as_tensor(pose, dtype=torch.float32))
-
-        # Voxel locs [B, M, N, 1, 3]
-        voxel_locs = lvusg.generate_volume_coordinates(voxel_res=torch.as_tensor([self.voxel_size, self.voxel_size, self.voxel_size], dtype=torch.float32),
-                                                       origin_volume=torch.as_tensor([self.origin[0], self.origin[1], self.origin[2]],dtype=torch.float32),
-                                                       coordinates_planes=coordinates_planes,
-                                                       shape_planes=shape_planes)
-
-        voxel_locs_norm =lvusg.normalise_voxel_locs(voxel_locs, shape_planes, self.sim_tensor.shape[0:3])
-
-        voxel_locs_norm = torch.transpose(torch.transpose(voxel_locs_norm, 1, 3), 2, 3)
-        # Create volume tensor
-        volume = torch.transpose(torch.transpose(torch.transpose(torch.transpose(torch.as_tensor(self.sim_tensor, dtype=torch.float32).expand(1, -1, -1, -1, -1), 4, 1), 4, 2), 2, 3), 4, 3)
-
-        out_im = sample(volume, voxel_locs_norm)
         _, axs = plt.subplots(nrows=1, ncols=2)
         axs[0].imshow(np.transpose(out_im.numpy()[0, :, 0, :, :], [1, 2, 0])) # B, W, H, D, Ch, (B, D = 1)
         axs[0].set_title("PyTorch Rendering")
