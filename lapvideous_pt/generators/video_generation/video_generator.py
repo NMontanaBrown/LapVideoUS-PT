@@ -10,10 +10,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import torch
 import lapvideous_pt.generators.video_generation.utils as vgu
-import pytorch3d
 from pytorch3d.io import load_obj
-# datastructures
-from pytorch3d.structures import Meshes, join_meshes_as_scene
 # rendering components
 from pytorch3d.renderer import (
     FoVPerspectiveCameras, PerspectiveCameras,  
@@ -25,6 +22,8 @@ from pytorch3d.renderer import (
 
 class VideoLoader():
     """
+    Class with useful utils to pre-process
+    data prior to rendering.
     """
     def __init__(self,
                  mesh_dir,
@@ -34,6 +33,12 @@ class VideoLoader():
                  intrinsics,
                  device):
         """
+        :param mesh_dir: str, path to directory where meshes are stored.
+        :param config_dir: str, path to .json file where 
+        :param liver2camera_reference: str, path to spp_liver2camera.txt
+        :param probe2camera_reference: str, path to spp_probe2camera.txt
+        :param intrinsics: str, path to calibration matrix.
+        :param device: torch.cuda device.
         """
         # Read config file.
         with open(config_dir) as f:
@@ -55,14 +60,14 @@ class VideoLoader():
         :return: void.
         """
         l2c_ref = np.loadtxt(liver2camera_ref)
-        r_l2c = torch.from_numpy(np.expand_dims(l2c_ref[:3, :3], 0).astype(np.float32)) # [1, 3, 3]
-        t_l2c = torch.from_numpy(np.expand_dims(l2c_ref[:3, 3], 0).astype(np.float32)) # [1, 3]
+        r_l2c = torch.from_numpy(np.expand_dims(l2c_ref[:3, :3], 0).astype(np.float32)).to(self.device) # [1, 3, 3]
+        t_l2c = torch.from_numpy(np.expand_dims(l2c_ref[:3, 3], 0).astype(np.float32)).to(self.device) # [1, 3]
         p2c_ref = np.loadtxt(probe2camera_ref)
-        r_p2c = torch.from_numpy(np.expand_dims(p2c_ref[:3, :3], 0).astype(np.float32)) # [1, 3, 3]
-        t_p2c = torch.from_numpy(np.expand_dims(p2c_ref[:3, 3], 0).astype(np.float32)) # [1, 3]
+        r_p2c = torch.from_numpy(np.expand_dims(p2c_ref[:3, :3], 0).astype(np.float32)).to(self.device) # [1, 3, 3]
+        t_p2c = torch.from_numpy(np.expand_dims(p2c_ref[:3, 3], 0).astype(np.float32)).to(self.device) # [1, 3]
         # Convert to PyTorch transforms.
-        l2c_pytorch, _, _ = vgu.opencv_to_opengl(r_l2c, t_l2c)
-        p2c_pytorch, _, _ = vgu.opencv_to_opengl(r_p2c, t_p2c)
+        l2c_pytorch, _, _ = vgu.opencv_to_opengl(r_l2c, t_l2c, self.device)
+        p2c_pytorch, _, _ = vgu.opencv_to_opengl(r_p2c, t_p2c, self.device)
         # Store
         self.l2c = l2c_pytorch
         self.p2c = p2c_pytorch
@@ -98,19 +103,24 @@ class VideoLoader():
         """
         Sets up a Perspective camera from a series of OpenCV
         parameters
-        :param intrinsics:
-        :param image_size:
+        :param intrinsics: np.array of camera intrinsics. OpenCV
+                           style.
+        :param image_size: list, (2,). Camera dimensions for original
+                           calibration matrix.
+        :param output_size: list, (2,). Image dimensions output.
+                            PyTorch3d rescales the data to this
+                            output size.
         :return: void
         """
         # Use one set of intrinsics only
-        K = torch.from_numpy(np.expand_dims(intrinsics, 0).astype(np.float32)) # 1, 3, 3
-        WH = torch.from_numpy(np.expand_dims(np.array(image_size), 0).astype(np.float32))
+        K = torch.from_numpy(np.expand_dims(intrinsics, 0).astype(np.float32)).to(self.device) # 1, 3, 3
+        WH = torch.from_numpy(np.expand_dims(np.array(image_size), 0).astype(np.float32)).to(self.device)
 
         # Initialize a perspective camera - we do this using a conversion from OpenCV.
         # The initial location of the camera doesn't matter as we can set this individually
         # each time later. So just set identity matrix.
-        eye =  torch.from_numpy(np.expand_dims(np.eye(3), 0).astype(np.float32))
-        t_eye =  torch.from_numpy(np.expand_dims(np.zeros(3), 0).astype(np.float32))
+        eye =  torch.from_numpy(np.expand_dims(np.eye(3), 0).astype(np.float32)).to(self.device)
+        t_eye =  torch.from_numpy(np.expand_dims(np.zeros(3), 0).astype(np.float32)).to(self.device)
         cameras = camera_conversions._cameras_from_opencv_projection(eye, t_eye, K, WH)
 
         # Generate params and settings for Phong renderer.
@@ -136,3 +146,4 @@ class VideoLoader():
             shader=HardPhongShader(device=self.device, cameras=cameras, lights=lights)
         )
         self.renderer = phong_renderer
+        self.renderer.to(self.device)
