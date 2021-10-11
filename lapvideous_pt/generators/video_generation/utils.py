@@ -34,7 +34,7 @@ def convert_points_to_stl(file):
     :return: void
     """
     # Rename file with .stl ending.
-    outfile = os.path.join(os.path.splitext(file)[0], ".stl")
+    outfile = os.path.splitext(file)[0]+ ".stl"
     reader = vtk.vtkGenericDataObjectReader()
     reader.SetFileName(file)
     reader.Update()
@@ -50,6 +50,7 @@ def opencv_to_opengl(matrix_R, matrix_T):
     right-handed matrix. (A = xB)
     Useful if we have reference poses acquired in opencv
     that we need in Pytorch convention for rendering.
+    Warning! The matrix must be a w2c matrix.
     :param matrix_R: torch.Tensor, [B, 3, 3] Rotation matrix.
     :param matrix_T: torch.Tensor, [B, 3], T vector
     :return: [left_handed_M, R_pytorch3d, T_pytorch3d]
@@ -72,6 +73,7 @@ def opengl_to_opencv(matrix_R, matrix_T):
     Converts [N, 3, 3], [N, 3] right-handed (A = xB)
     matrix in openGL/PyTorch to openCV
     left-handed matrix. (A = Bx)
+    Warning! The matrix must be a w2c matrix.
     :param matrix_R: torch.Tensor, [B, 3, 3] Rotation matrix.
     :param matrix_T: torch.Tensor, [B, 3], T vector
     :return: [right_handed_M, R_openCV, T_openCV]
@@ -81,9 +83,28 @@ def opengl_to_opencv(matrix_R, matrix_T):
     R_openCV[:, :, :2] *= -1
     T_openCV[:, :2] *= -1
     R_openCV = R_openCV.permute(0, 2, 1) # Transpose
-    ones = torch.from_numpy(np.ones((1,4), np.float32)) # [1, 4]
-    right_handed_M = torch.cat((R_openCV, T_openCV.expand(1, -1, -1,)), 1)
-    right_handed_M = torch.cat((right_handed_M, torch.transpose(ones.expand(1, -1, -1), 2, 1)), 2)
+
+    eye = torch.eye(4, dtype=torch.float32) # Use last column
+    _, column = torch.split(eye, [3, 1])
+    right_handed_M = torch.cat((R_openCV, torch.transpose(torch.transpose(T_openCV.expand(1, -1, -1), 2, 0), 1, 0)), 2)
+    right_handed_M = torch.cat((right_handed_M, torch.tile(column.expand(1, -1, -1), [R_openCV.shape[0], 1, 1])), 1)
+    return right_handed_M, R_openCV, T_openCV
+
+def opengl_to_opencv_p2l(matrix_R, matrix_T):
+    """
+    Specifically for converting OpenGL for liver
+    frame of reference to openCV.
+    :param matrix_R: torch.Tensor [B, 3, 3]
+    :param matrix_T: torch.Tensor [B, 3,]
+    """
+    R_openCV = matrix_R.clone()
+    T_openCV = matrix_T.clone()
+    R_openCV = R_openCV.permute(0, 2, 1) # Transpose
+
+    eye = torch.eye(4, dtype=torch.float32) # Use last column
+    _, column = torch.split(eye, [3, 1])
+    right_handed_M = torch.cat((R_openCV, torch.transpose(torch.transpose(T_openCV.expand(1, -1, -1), 2, 0), 1, 0)), 2)
+    right_handed_M = torch.cat((right_handed_M, torch.tile(column.expand(1, -1, -1), [R_openCV.shape[0], 1, 1])), 1)
     return right_handed_M, R_openCV, T_openCV
 
 def split_opengl_hom_matrix(matrix):
@@ -107,7 +128,7 @@ def split_opencv_hom_matrix(matrix):
     :return: [R, T]
     """
     r, t = torch.split(torch.split(matrix, [3, 1], 1)[0], [3, 1], 2)
-    t =  torch.squeeze(t, 1) # N, 3
+    t =  torch.squeeze(t, 2) # N, 3
     return r, t
 
 def p2l_2_slicesampler(pose):
@@ -119,6 +140,8 @@ def p2l_2_slicesampler(pose):
     :return: new_pose, torch.Tensor, (N,4,4) homogenous transformation
              of US plane characterization for slicesampler databases.
     """
+    pose_clone = pose.clone()
+    pose[:, :2, :] *= -1 
     x, y, z, t = torch.split(pose, [1, 1, 1, 1], 2)
     x_new = torch.neg(y)
     x_new_3, _ = torch.split(x_new, [3, 1], 1)
