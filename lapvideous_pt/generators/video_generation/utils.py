@@ -175,3 +175,23 @@ def slicesampler_2_p2l(pose):
     z_old_final = torch.cat([z_old, z_0], dim=1)
     pose_slicesampler = torch.cat([x_old, y_old_final, z_old_final, t], dim=2)
     return pose_slicesampler
+
+def global_to_local_space(pose_t, bounds):
+    """
+    Transforms pose in world space to a normalised
+    world space.
+    :param pose: torch.Tensor, (N, 3)
+    :param bounds: torch.Tensor, (3)
+    :return: torch.Tensor, (N, 3)
+    """
+    return torch.divide(pose_t, bounds)
+
+def local_to_global_space(pose_t, bounds):
+    """
+    Transforms pose in a normalised world
+    space to global world space.
+    :param pose: torch.Tensor, (N, 3)
+    :param bounds: torch.Tensor, (3)
+    :return: torch.Tensor, (N, 3)
+    """
+    return torch.multiply(pose_t, bounds)
