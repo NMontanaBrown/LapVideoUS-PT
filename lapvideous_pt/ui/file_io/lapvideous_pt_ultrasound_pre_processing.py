@@ -35,7 +35,7 @@ if __name__ == "__main__":
 
     ## ARGS
     parser.add_argument("--path_json_config",
-                        "-p",
+                        "-pj",
                         required=True,
                         type=str,
                         help="Path to config .json for simulation")
@@ -48,5 +48,5 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    prep_US_data(args.path_json_config,
-                 args.pose)
+    prep_US_data(os.path.abspath(args.path_json_config),
+                 os.path.abspath(args.pose))
