@@ -43,7 +43,7 @@ def convert_points_to_stl(file):
     writer.SetFileName(outfile)
     writer.Write()
 
-def opencv_to_opengl(matrix_R, matrix_T):
+def opencv_to_opengl(matrix_R, matrix_T, device):
     """
     Converts [N, 3, 3], [B, 3] left-handed (A = Bx)
     matrix in open-cv to [B, 4, 4]
@@ -62,13 +62,13 @@ def opencv_to_opengl(matrix_R, matrix_T):
     T_pytorch3d= matrix_T.clone()
     R_pytorch3d[:, :, :2] *= -1
     T_pytorch3d[:, :2] *= -1
-    eye = torch.eye(4, dtype=torch.float32) # Use last column
+    eye = torch.eye(4, dtype=torch.float32, device=device) # Use last column
     _, column = torch.split(eye, [3, 1])
     left_handed_M = torch.cat((R_pytorch3d, T_pytorch3d.expand(1, -1, -1,)), 1)
     left_handed_M = torch.cat((left_handed_M, torch.transpose(column.expand(1, -1, -1), 2, 1)), 2)
     return left_handed_M, R_pytorch3d, T_pytorch3d
 
-def opengl_to_opencv(matrix_R, matrix_T):
+def opengl_to_opencv(matrix_R, matrix_T, device):
     """
     Converts [N, 3, 3], [N, 3] right-handed (A = xB)
     matrix in openGL/PyTorch to openCV
@@ -84,13 +84,13 @@ def opengl_to_opencv(matrix_R, matrix_T):
     T_openCV[:, :2] *= -1
     R_openCV = R_openCV.permute(0, 2, 1) # Transpose
 
-    eye = torch.eye(4, dtype=torch.float32) # Use last column
+    eye = torch.eye(4, dtype=torch.float32, device=device) # Use last column
     _, column = torch.split(eye, [3, 1])
     right_handed_M = torch.cat((R_openCV, torch.transpose(torch.transpose(T_openCV.expand(1, -1, -1), 2, 0), 1, 0)), 2)
-    right_handed_M = torch.cat((right_handed_M, torch.tile(column.expand(1, -1, -1), [R_openCV.shape[0], 1, 1])), 1)
+    right_handed_M = torch.cat((right_handed_M, column.expand(1, -1, -1).repeat(R_openCV.shape[0], 1, 1)), 1)
     return right_handed_M, R_openCV, T_openCV
 
-def opengl_to_opencv_p2l(matrix_R, matrix_T):
+def opengl_to_opencv_p2l(matrix_R, matrix_T, device):
     """
     Specifically for converting OpenGL for liver
     frame of reference to openCV.
@@ -101,10 +101,10 @@ def opengl_to_opencv_p2l(matrix_R, matrix_T):
     T_openCV = matrix_T.clone()
     R_openCV = R_openCV.permute(0, 2, 1) # Transpose
 
-    eye = torch.eye(4, dtype=torch.float32) # Use last column
+    eye = torch.eye(4, dtype=torch.float32, device=device) # Use last column
     _, column = torch.split(eye, [3, 1])
     right_handed_M = torch.cat((R_openCV, torch.transpose(torch.transpose(T_openCV.expand(1, -1, -1), 2, 0), 1, 0)), 2)
-    right_handed_M = torch.cat((right_handed_M, torch.tile(column.expand(1, -1, -1), [R_openCV.shape[0], 1, 1])), 1)
+    right_handed_M = torch.cat((right_handed_M, column.expand(1, -1, -1).repeat(R_openCV.shape[0], 1, 1)), 1)
     return right_handed_M, R_openCV, T_openCV
 
 def split_opengl_hom_matrix(matrix):
