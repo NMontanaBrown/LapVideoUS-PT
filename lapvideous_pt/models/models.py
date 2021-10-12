@@ -10,7 +10,10 @@ from ntpath import join
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+from vtk.numpy_interface.dataset_adapter import NoneArray
 from pytorch3d.transforms import Transform3d
+from pytorch3d.transforms import rotation_conversions as p3drc
 # LapVideoUS-PT
 import lapvideous_pt.generators.video_generation.utils as vru
 import lapvideous_pt.generators.ultrasound_reslicing.us_generator as lvusg
@@ -68,7 +71,26 @@ class LapVideoUS(nn.Module):
         self.pre_process_US_files(path_us_tensors,
                                   name_tensor)
 
-        # Would build NN layers here
+    def build_nn(self, image_size):
+        """
+        Class method to build neural network.
+        Simple couple of convolutional layers with
+        FCNs at the end.
+        """
+        self.conv1 = nn.Conv2d(in_channels=3, out_channels=12, kernel_size=3, stride=1, padding=1) # Hout = Hin
+        conv2 = nn.Conv2d(in_channels=12, out_channels=12, kernel_size=3, stride=1, padding=1) # Hout = Hin
+        pool = nn.MaxPool2d(2,2)
+        conv4 = nn.Conv2d(in_channels=12, out_channels=24, kernel_size=5, stride=1, padding=2)
+        conv5 = nn.Conv2d(in_channels=24, out_channels=24, kernel_size=5, stride=1, padding=2) # Hout/2
+        pool2 = nn.MaxPool2d(2,2)
+        conv6 = nn.Conv2d(in_channels=24, out_channels=48, kernel_size=5, stride=1, padding=2)
+        conv7 = nn.Conv2d(in_channels=48, out_channels=48, kernel_size=5, stride=1, padding=2)
+        pool3 = nn.MaxPool2d(2,2) # Hout/8
+        fc1 = nn.Linear(48*image_size[0]*image_size[1], 48*image_size[0])
+        fc2 = nn.Linear(48*image_size[0], 48)
+        fc3 = nn.Linear(48, 14)
+        self.conv_layers = [conv2, pool, conv4, conv5, pool2, conv6, conv7, pool3,]
+        self.fcns = [fc1, fc2, fc3]
 
     def pre_process_video_files(self,
                                 mesh_dir,
@@ -119,17 +141,14 @@ class LapVideoUS(nn.Module):
                    "origin":origin}
         self.us_dict = us_dict
 
-    def forward(self):
+    def render_data(self, transform_l2c, transform_p2c):
         """
-        Defines forward pass. Generate video and US data
-        Pass through model.
-        Re-render. Calculate loss.
+        Generate some data based on a given set
+        of transforms.
+        :param transform_p2c: torch.Tensor, [N, 4, 4]
+        :param transform_l2c: torch.Tensor, [N, 4, 4]
+        :return: [image, us], torch.Tensors
         """
-        # Base data
-        # In PT frame of reference.
-        transform_l2c = self.video_loader.l2c.expand(self.batch, -1, -1) # (N, 4, 4)
-        transform_p2c = self.video_loader.p2c.expand(self.batch, -1, -1) # (N, 4, 4)
-
         # Base rendering objects - Video
         verts_liver = self.video_loader.meshes["liver"]["verts"].to(self.device) # (1, L, 3)
         faces_liver = self.video_loader.meshes["liver"]["faces"].to(self.device)# (1, G)
@@ -154,7 +173,7 @@ class LapVideoUS(nn.Module):
         # Transform l2c OpenGL/PyTorch into P2L slicesampler for US slicing.
         p2l_open_gl = transform_p2c_perturbed.compose(transform_c2l).get_matrix()
         r_p2l, t_p2l = vru.split_opengl_hom_matrix(p2l_open_gl.to(self.device))
-        M_p2l_opencv, _, _ = vru.opengl_to_opencv(r_p2l.to(self.device), t_p2l.to(self.device), self.device)
+        M_p2l_opencv, _, _ = vru.opengl_to_opencv_p2l(r_p2l.to(self.device), t_p2l.to(self.device), self.device)
         r_p2l_cv, t_p2l_cv = vru.split_opencv_hom_matrix(M_p2l_opencv)
         M_p2l_slicesampler = vru.p2l_2_slicesampler(M_p2l_opencv)
 
@@ -196,3 +215,45 @@ class LapVideoUS(nn.Module):
                                 self.batch,
                                 self.device)
         return image, us
+
+    def forward(self, data):
+        """
+        Defines forward pass.
+        Pass data through model.
+        Re-render calculated poses.
+        Calculate loss.
+        """
+
+        #### NETWORKS
+        out = F.Relu(self.conv1(data))
+        for layer in self.conv_layers:
+            out = F.relu(layer(out))
+
+        out = torch.flatten(out, start_dim=1) # Flatten but maintain batches
+        for i, layer in enumerate(self.fcns):
+            if i != len(self.fcns)-1:
+                out = F.Relu(layer(out))
+            else:
+                # Use tanh to scale between -1 and 1.
+                out = F.tanh(layer(out))
+
+        #### POST PROCESS OUTPUTS - 14 vector [-1, 1]
+        c2l_q, c2l_t, p2l_q, p2l_t = torch.split(out, [4, 3, 4, 3], dim=1)
+        c2l_r = p3drc.quaternion_to_matrix(c2l_q)
+        p2l_r = p3drc.quaternion_to_matrix(p2l_q)
+        c2l_t_global = vru.local_to_global_space(c2l_t, self.bounds)
+        p2l_t_global = vru.local_to_global_space(p2l_t, self.bounds)
+        p2l_opengGL = vru.opencv_to_opengl_p2l(p2l_r, p2l_t_global, self.device)
+        c2l_openGL = vru.opencv_to_opengl(c2l_r, c2l_t_global, self.device)
+
+        p2l_pytorch3d = Transform3d(matrix=p2l_opengGL, device=self.device)
+        c2l_pytorch3d = Transform3d(matrix=c2l_openGL, device=self.device)
+
+        transform_l2c_pred = c2l_pytorch3d.inverse()
+        transform_p2c_pred = p2l_pytorch3d.compose(transform_l2c_pred)
+        image_pred, us_pred = self.render_data(transform_p2c=transform_p2c_pred,
+                                               transform_l2c=transform_l2c_pred)
+
+        #### CALCULATE LOSS
+
+        return image_pred, us_pred
