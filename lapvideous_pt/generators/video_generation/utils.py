@@ -107,6 +107,24 @@ def opengl_to_opencv_p2l(matrix_R, matrix_T, device):
     right_handed_M = torch.cat((right_handed_M, column.expand(1, -1, -1).repeat(R_openCV.shape[0], 1, 1)), 1)
     return right_handed_M, R_openCV, T_openCV
 
+def opencv_to_opengl_p2l(matrix_R, matrix_T, device):
+    """
+    Specifically for converting OpenCV preds
+    for liver frame of reference to OpenGL.
+    :param matrix_R: torch.Tensor [B, 3, 3]
+    :param matrix_T: torch.Tensor [B, 3,]
+    """
+    R_openGL = matrix_R.clone()
+    T_openGL = torch.transpose(matrix_T.clone().expand(1, -1, -1), 1, 0) # (N, 1, 3)
+    R_openGL = R_openGL.permute(0, 2, 1) # Transpose
+
+    eye = torch.eye(4, dtype=torch.float32, device=device) # Use last column
+    _, column = torch.split(eye, [3, 1])
+    column = torch.transpose(column.expand(1, -1, -1).repeat(R_openGL.shape[0], 1, 1), 2, 1)
+    left_handed_M = torch.cat((R_openGL, T_openGL), 1) # Cat along rows
+    left_handed_M = torch.cat((left_handed_M, column), 2) # Cat along columns
+    return left_handed_M, R_openGL, T_openGL
+
 def split_opengl_hom_matrix(matrix):
     """
     OpenGL/Pytorch3D format = [R 0,
@@ -141,8 +159,7 @@ def p2l_2_slicesampler(pose):
              of US plane characterization for slicesampler databases.
     """
     pose_clone = pose.clone()
-    pose[:, :2, :] *= -1 
-    x, y, z, t = torch.split(pose, [1, 1, 1, 1], 2)
+    x, y, z, t = torch.split(pose_clone, [1, 1, 1, 1], 2)
     x_new = torch.neg(y)
     x_new_3, _ = torch.split(x_new, [3, 1], 1)
     z_3, z_0 = torch.split(z, [3, 1], 1)
