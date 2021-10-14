@@ -52,6 +52,7 @@ class LapVideoUS(nn.Module):
         super().__init__()
         # Setup CUDA device.
         if torch.cuda.is_available():
+            print("Using CUDA Device: ", torch.device(device))
             device = torch.device(device)
             torch.cuda.set_device(device)
         else:
@@ -60,6 +61,8 @@ class LapVideoUS(nn.Module):
         self.meshes_dict = mesh_dir
         self.device = device
         self.batch = batch
+        self.image_size = image_size
+        print("Mem allocated before video: ", torch.cuda.memory_allocated())
         self.pre_process_video_files(mesh_dir,
                                      config_dir,
                                      liver2camera_reference,
@@ -68,29 +71,40 @@ class LapVideoUS(nn.Module):
                                      output_size,
                                      intrinsics,
                                      device)
+        print("Mem allocated after video: ", torch.cuda.memory_allocated())
+        print("Mem allocated before US: ", torch.cuda.memory_allocated())
         self.pre_process_US_files(path_us_tensors,
                                   name_tensor)
+        print("Mem allocated after US: ", torch.cuda.memory_allocated())
+        print("Mem allocated before model build: ", torch.cuda.memory_allocated())
+        self.build_nn(output_size)
+        self.to(device).float()
+        print("Mem allocated after model build: ", torch.cuda.memory_allocated())
+
 
     def build_nn(self, image_size):
         """
         Class method to build neural network.
         Simple couple of convolutional layers with
         FCNs at the end.
+        :param image_size:
         """
-        self.conv1 = nn.Conv2d(in_channels=3, out_channels=12, kernel_size=3, stride=1, padding=1) # Hout = Hin
-        conv2 = nn.Conv2d(in_channels=12, out_channels=12, kernel_size=3, stride=1, padding=1) # Hout = Hin
-        pool = nn.MaxPool2d(2,2)
-        conv4 = nn.Conv2d(in_channels=12, out_channels=24, kernel_size=5, stride=1, padding=2)
-        conv5 = nn.Conv2d(in_channels=24, out_channels=24, kernel_size=5, stride=1, padding=2) # Hout/2
-        pool2 = nn.MaxPool2d(2,2)
-        conv6 = nn.Conv2d(in_channels=24, out_channels=48, kernel_size=5, stride=1, padding=2)
-        conv7 = nn.Conv2d(in_channels=48, out_channels=48, kernel_size=5, stride=1, padding=2)
-        pool3 = nn.MaxPool2d(2,2) # Hout/8
-        fc1 = nn.Linear(48*image_size[0]*image_size[1], 48*image_size[0])
-        fc2 = nn.Linear(48*image_size[0], 48)
-        fc3 = nn.Linear(48, 14)
-        self.conv_layers = [conv2, pool, conv4, conv5, pool2, conv6, conv7, pool3,]
-        self.fcns = [fc1, fc2, fc3]
+        print("Building Model...")
+        self.conv1 = nn.Conv2d(in_channels=4, out_channels=12, kernel_size=3, stride=1, padding=1) # Hout = Hin
+        self.conv2 = nn.Conv2d(in_channels=12, out_channels=12, kernel_size=3, stride=1, padding=1) # Hout = Hin
+        self.pool = nn.MaxPool2d(2,2)
+        self.conv4 = nn.Conv2d(in_channels=12, out_channels=24, kernel_size=5, stride=1, padding=2)
+        self.conv5 = nn.Conv2d(in_channels=24, out_channels=24, kernel_size=5, stride=1, padding=2) # Hout/2
+        self.pool2 = nn.MaxPool2d(2,2)
+        self.conv6 = nn.Conv2d(in_channels=24, out_channels=48, kernel_size=5, stride=1, padding=2)
+        self.conv7 = nn.Conv2d(in_channels=48, out_channels=48, kernel_size=5, stride=1, padding=2)
+        self.pool3 = nn.MaxPool2d(2,2) # Hout/8
+        self.fc1 = nn.Linear(30000, 10000)
+        self.fc2 = nn.Linear(10000, 5000)
+        self.fc3 = nn.Linear(5000, 1000)
+        self.fc4 = nn.Linear(1000, 100)
+        self.fc5 = nn.Linear(100, 14)
+        print("Model built.")
 
     def pre_process_video_files(self,
                                 mesh_dir,
@@ -103,7 +117,14 @@ class LapVideoUS(nn.Module):
                                 device):
         """
         Pre-process the video data and files
-
+        :param mesh_dir:
+        :param config_dir:
+        :param liver2camera_reference:
+        :param prob2camera_reference:
+        :param image_size:
+        :param output_size:
+        :param intrinsics:
+        :param device:
         """
         video_loader = VideoLoader(mesh_dir,
                                    config_dir,
@@ -155,7 +176,13 @@ class LapVideoUS(nn.Module):
         textures_liver = self.video_loader.meshes["liver"]["textures"].to(self.device) # (1, L)
         verts_probe = self.video_loader.meshes["probe"]["verts"].to(self.device) # (1, P, 3)
         faces_probe = self.video_loader.meshes["probe"]["faces"].to(self.device) # (1, F)
-        textures_probe = self.video_loader.meshes["probe"]["textures"].to(self.device) # (1, P) 
+        textures_probe = self.video_loader.meshes["probe"]["textures"].to(self.device) # (1, P)
+        batch_textures_liver = [textures_liver for i in range(self.batch)]
+        batch_textures_probe = [textures_probe for i in range(self.batch)]
+        batch_faces_probe = faces_probe.repeat(self.batch, 1, 1).to(self.device)
+        batch_faces_liver = faces_liver.repeat(self.batch, 1, 1).to(self.device)
+        batch_faces_probe = faces_probe.repeat(self.batch, 1, 1).to(self.device)
+        verts_liver_batch = verts_liver.repeat(self.batch, 1, 1).to(self.device) # (N, P, 3)
         verts_probe_batch = verts_probe.repeat(self.batch, 1, 1).to(self.device) # (N, P, 3)
         # Base rendering objects - US
         image_dim = self.us_dict["image_dim"]
@@ -190,13 +217,16 @@ class LapVideoUS(nn.Module):
                                                                  verts_probe_batch,
                                                                  self.batch,
                                                                  self.device)
+        verts_liver_unbatched = torch.split(verts_liver_batch,  [1 for i in range(self.batch)], 0)
+        faces_liver_unbatched = torch.split(batch_faces_liver,  [1 for i in range(self.batch)], 0)
+        faces_probe_unbatched = torch.split(batch_faces_probe,  [1 for i in range(self.batch)], 0)
         # Create list of N meshes with both liver and probe.
-        batch_meshes = lvvmu.generate_composite_probe_and_liver_meshes(verts_liver,
-                                                                       faces_liver,
-                                                                       textures_liver,
+        batch_meshes = lvvmu.generate_composite_probe_and_liver_meshes(verts_liver_unbatched,
+                                                                       faces_liver_unbatched,
+                                                                       batch_textures_liver,
                                                                        verts_probe_unbatched,
-                                                                       faces_probe,
-                                                                       textures_probe,
+                                                                       faces_probe_unbatched,
+                                                                       batch_textures_probe,
                                                                        self.batch)
         # Normalise in openCV space
         t_p2l_norm = vru.global_to_local_space(t_p2l_cv, self.bounds)
@@ -222,38 +252,47 @@ class LapVideoUS(nn.Module):
         Pass data through model.
         Re-render calculated poses.
         Calculate loss.
+        :param data: torch.Tensor, (N, Ch, H, W)
+        :return: [loss_im, image_pred, us_pred]
         """
 
         #### NETWORKS
-        out = F.Relu(self.conv1(data))
-        for layer in self.conv_layers:
-            out = F.relu(layer(out))
+        out = F.relu(self.conv1(data))
+        out = F.relu(self.conv2(out))
+        out = F.relu(self.pool(out))
+        out = F.relu(self.conv4(out))
+        out = F.relu(self.conv5(out))
+        out = F.relu(self.pool2(out))
+        out = F.relu(self.conv6(out))
+        out = F.relu(self.conv7(out))
+        out = F.relu(self.pool3(out))
+        out = torch.flatten(out, start_dim=1)
+        out = F.relu(self.fc1(out))
+        out = F.relu(self.fc2(out))
+        out = F.relu(self.fc3(out))
+        out = F.relu(self.fc4(out))
+        out = F.tanh(self.fc5(out))
 
-        out = torch.flatten(out, start_dim=1) # Flatten but maintain batches
-        for i, layer in enumerate(self.fcns):
-            if i != len(self.fcns)-1:
-                out = F.Relu(layer(out))
-            else:
-                # Use tanh to scale between -1 and 1.
-                out = F.tanh(layer(out))
-
-        #### POST PROCESS OUTPUTS - 14 vector [-1, 1]
+        #### POST PROCESS OUTPUTS - 14 vector of [-1, 1]
+        # For translations we need a representation in bounded space
         c2l_q, c2l_t, p2l_q, p2l_t = torch.split(out, [4, 3, 4, 3], dim=1)
         c2l_r = p3drc.quaternion_to_matrix(c2l_q)
         p2l_r = p3drc.quaternion_to_matrix(p2l_q)
         c2l_t_global = vru.local_to_global_space(c2l_t, self.bounds)
         p2l_t_global = vru.local_to_global_space(p2l_t, self.bounds)
-        p2l_opengGL = vru.opencv_to_opengl_p2l(p2l_r, p2l_t_global, self.device)
-        c2l_openGL = vru.opencv_to_opengl(c2l_r, c2l_t_global, self.device)
+        p2l_opengGL, _, _ = vru.opencv_to_opengl_p2l(p2l_r, p2l_t_global, self.device)
+        c2l_openGL, _, _ = vru.opencv_to_opengl(c2l_r, c2l_t_global, self.device)
 
         p2l_pytorch3d = Transform3d(matrix=p2l_opengGL, device=self.device)
         c2l_pytorch3d = Transform3d(matrix=c2l_openGL, device=self.device)
 
         transform_l2c_pred = c2l_pytorch3d.inverse()
         transform_p2c_pred = p2l_pytorch3d.compose(transform_l2c_pred)
-        image_pred, us_pred = self.render_data(transform_p2c=transform_p2c_pred,
-                                               transform_l2c=transform_l2c_pred)
+        image_pred, us_pred = self.render_data(transform_p2c=transform_p2c_pred.get_matrix(),
+                                               transform_l2c=transform_l2c_pred.get_matrix())
 
         #### CALCULATE LOSS
-
-        return image_pred, us_pred
+        loss_us = torch.nn.MSELoss()
+        # loss_u = loss_us(data, us_pred)
+        loss_im = loss_us(data, torch.transpose(image_pred, 3, 1))
+        return loss_im, image_pred, us_pred
