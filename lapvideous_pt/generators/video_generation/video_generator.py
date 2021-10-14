@@ -124,11 +124,14 @@ class VideoLoader():
         cameras = camera_conversions._cameras_from_opencv_projection(eye, t_eye, K, WH)
 
         # Generate params and settings for Phong renderer.
+        # Hard code faces per bin - otherwise we can get patches
+        # missing from the pictures rendered. See issue #1 for details.
         blend_params = BlendParams(sigma=1e-4, gamma=1e-4)
         raster_settings = RasterizationSettings(
             image_size=output_size, 
             blur_radius=np.log(1. / 1e-4 - 1.) * blend_params.sigma, 
-            faces_per_pixel=100, 
+            faces_per_pixel=1,
+            max_faces_per_bin=1000000
         )
         rasterizer = MeshRasterizer(
                 cameras=cameras, 

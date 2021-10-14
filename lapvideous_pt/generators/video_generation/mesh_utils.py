@@ -22,7 +22,7 @@ def batch_verts_transformation(c2l, p2c, verts_probe, batch, device):
     verts_probe_unbatched = torch.split(verts_probe_transformed,  [1 for i in range(batch)], 0)
     return verts_probe_unbatched
 
-def generate_composite_probe_and_liver_meshes(verts_liver,
+def generate_composite_probe_and_liver_meshes(verts_liver_unbatched,
                                               faces_liver,
                                               textures_liver,
                                               verts_probe_unbatched,
@@ -34,19 +34,23 @@ def generate_composite_probe_and_liver_meshes(verts_liver,
     with a probe mesh in an ordered fashion such that each batch
     represents the scene of one liver2camera and probe2liver
     transformation.
-    :param verts_liver: torch.Tensor, (B, 3), vertices of liver
-                        mesh.
-    :param faces_liver: torch.Tensor, (F,), faces of liver mesh. 
+    :param verts_liver_unbatched: List[torch.Tensor], (N,), vertices
+                        of liver mesh.
+    :param faces_liver: List[torch.Tensor], Nx(F,), faces of liver mesh. 
     :param textures_liver: 
     :param verts_probe_unbatched: List[torch.Tensor], (N,),
                                   transformed vertices in liver space.
-    :param faces_probe: torch.Tensor (G,), faces of probe mesh.
+    :param faces_probe: List[torch.Tensor] Nx(G,), faces of probe mesh.
     :param textures_probe:
     :param batch: int, (N), batch size.
     :return: List[Meshes], (N,)
     """
     scene_meshes = [
-            join_meshes_as_scene([Meshes(verts_liver.expand(1, -1, -1), faces_liver.expand(1, -1, -1), textures_liver),
-                                 Meshes(verts_probe_unbatched[i], faces_probe.expand(1, -1, -1), textures_probe)]) for i in range(batch)]
+            join_meshes_as_scene([Meshes(verts=verts_liver_unbatched[i],
+                                         faces=faces_liver[i],
+                                         textures=textures_liver[i]),
+                                 Meshes(verts=verts_probe_unbatched[i],
+                                        faces=faces_probe[i],
+                                        textures=textures_probe[i])]) for i in range(batch)]
     batch_meshes = join_meshes_as_batch(scene_meshes)
     return batch_meshes
