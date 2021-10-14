@@ -64,8 +64,9 @@ def opencv_to_opengl(matrix_R, matrix_T, device):
     T_pytorch3d[:, :2] *= -1
     eye = torch.eye(4, dtype=torch.float32, device=device) # Use last column
     _, column = torch.split(eye, [3, 1])
-    left_handed_M = torch.cat((R_pytorch3d, T_pytorch3d.expand(1, -1, -1,)), 1)
-    left_handed_M = torch.cat((left_handed_M, torch.transpose(column.expand(1, -1, -1), 2, 1)), 2)
+    column = torch.transpose(column.expand(1, -1, -1).repeat(R_pytorch3d.shape[0], 1, 1), 2, 1)
+    left_handed_M = torch.cat((R_pytorch3d, torch.transpose(T_pytorch3d.expand(1, -1, -1,), 1, 0)), 1)
+    left_handed_M = torch.cat((left_handed_M, column), 2)
     return left_handed_M, R_pytorch3d, T_pytorch3d
 
 def opengl_to_opencv(matrix_R, matrix_T, device):
