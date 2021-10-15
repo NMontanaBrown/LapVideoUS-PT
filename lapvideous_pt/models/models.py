@@ -62,6 +62,7 @@ class LapVideoUS(nn.Module):
         self.device = device
         self.batch = batch
         self.image_size = image_size
+        self.output_size = output_size
         print("Mem allocated before video: ", torch.cuda.memory_allocated())
         self.pre_process_video_files(mesh_dir,
                                      config_dir,
@@ -90,7 +91,7 @@ class LapVideoUS(nn.Module):
         :param image_size:
         """
         print("Building Model...")
-        self.conv1 = nn.Conv2d(in_channels=4, out_channels=12, kernel_size=3, stride=1, padding=1) # Hout = Hin
+        self.conv1 = nn.Conv2d(in_channels=7, out_channels=12, kernel_size=3, stride=1, padding=1) # Hout = Hin
         self.conv2 = nn.Conv2d(in_channels=12, out_channels=12, kernel_size=3, stride=1, padding=1) # Hout = Hin
         self.pool = nn.MaxPool2d(2,2)
         self.conv4 = nn.Conv2d(in_channels=12, out_channels=24, kernel_size=5, stride=1, padding=2)
@@ -154,12 +155,22 @@ class LapVideoUS(nn.Module):
         origin = torch.from_numpy(np.load(os.path.join(path_us_tensors, name_tensor.replace(".npy", "_origin.npy")))).to(device=self.device)
         pix_dim = torch.from_numpy(np.load(os.path.join(path_us_tensors, name_tensor.replace(".npy",'_pixdim.npy')))).to(device=self.device)
         im_dim = torch.from_numpy(np.load(os.path.join(path_us_tensors, name_tensor.replace(".npy",'_imdim.npy')))).to(device=self.device)
-
+        print("Im dim US: ", im_dim)
         us_dict = {"image_dim":im_dim,
                    "voxel_size":0.5,
                    "pixel_size":pix_dim,
                    "volume":volume,
                    "origin":origin}
+        # Calculate us diff for padding
+        diff_us_size = list(self.output_size - im_dim.cpu().numpy()[0:2])
+        list_padding = []
+        for item in diff_us_size:
+            if item %2 != 0:
+                list_padding.extend([int(np.floor(item/2)), int(np.ceil(item/2))])
+            else:
+                list_padding.extend([int(item/2), int(item/2)])
+        print(tuple(list_padding))
+        self.us_pad = tuple(list_padding)
         self.us_dict = us_dict
 
     def prep_input_data_for_render(self):
@@ -206,8 +217,7 @@ class LapVideoUS(nn.Module):
                  - (N, Ch_us, H_us, W_us),
         """
 
-        # Modify transforms p2c, l2c by perturbing them by some degree. For now we
-        # use the original transform to demo.
+        # We pass some p2c and l2c into the forward function.
         transform_p2c_perturbed = Transform3d(matrix=transform_p2c, device=self.device)
         transform_l2c_perturbed = Transform3d(matrix=transform_l2c, device=self.device)
         transform_c2l = transform_l2c_perturbed.inverse().to(self.device)
@@ -260,7 +270,11 @@ class LapVideoUS(nn.Module):
                                 self.us_dict["volume"],
                                 self.batch,
                                 self.device)
-        return image, us
+        # Batch together, reshape US into correct output size.
+        us = torch.transpose(torch.transpose(torch.squeeze(us, 2), 2, 1), 2, 1) # [N, ch, H, W]
+        us_pad = F.pad(us, self.us_pad) # (N, Ch, Out_size[0], Out_size[1])
+        image_tensor = torch.cat([torch.transpose(torch.transpose(image, 3, 1), 3, 2), us_pad], 1) # Cat along channels
+        return image_tensor
 
     def forward(self, liver_data, image_data):
         """
@@ -309,12 +323,12 @@ class LapVideoUS(nn.Module):
 
         transform_l2c_pred = c2l_pytorch3d.inverse()
         transform_p2c_pred = p2l_pytorch3d.compose(transform_l2c_pred)
-        image_pred, us_pred = self.render_data(liver_data=liver_data,
-                                               transform_p2c=transform_p2c_pred.get_matrix(),
-                                               transform_l2c=transform_l2c_pred.get_matrix())
+        tensor_pred = self.render_data(liver_data=liver_data,
+                                       transform_p2c=transform_p2c_pred.get_matrix(),
+                                       transform_l2c=transform_l2c_pred.get_matrix())
 
         #### CALCULATE LOSS
         loss_us = torch.nn.MSELoss()
-        # loss_u = loss_us(data, us_pred)
-        loss_im = loss_us(image_data, torch.transpose(image_pred, 3, 1))
-        return loss_im, image_pred, us_pred
+        # Taking complete image loss
+        loss_im = loss_us(image_data, tensor_pred)
+        return loss_im, tensor_pred
