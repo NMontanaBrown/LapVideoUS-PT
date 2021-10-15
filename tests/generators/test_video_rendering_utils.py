@@ -165,3 +165,31 @@ def test_split_gl_hom():
     split_r_test, split_t_test = vru.split_opengl_hom_matrix(M)
     assert np.allclose(split_r.numpy(), split_r_test.numpy())
     assert np.allclose(split_t.numpy(), split_t_test.numpy())
+
+def test_gen_random_params_index():
+    """
+    Test that we get random numbers generated
+    at appropriate indices.
+    """
+    device = torch.device("cpu")
+    generated_values = vru.generate_random_params_index(device, 4, [0, 3])
+    split_values = torch.split(generated_values, [1,1,1,1,1,1], 1)
+    # Check indices not at 0, 3 are zeross
+    assert np.allclose(split_values[1].numpy(), split_values[-1].numpy())
+
+def test_gen_ordered_params_index():
+    """
+    Test we get an ordered list as expected.
+    """
+    device = torch.device("cpu")
+    generated_values = vru.generate_ordered_params_index(device, 10, [0], [-10], [0])
+    split_values, _ = torch.split(generated_values, [1,5], 1)
+    assert np.allclose(split_values.numpy(), np.expand_dims(np.linspace(-10, 0, 10), 1))
+
+def test_generate_transforms():
+    """
+    Test we get can call and get a series of transforms
+    """
+    device = torch.device("cpu")
+    generated_values = vru.generate_transforms(device, 3, None)
+    return True

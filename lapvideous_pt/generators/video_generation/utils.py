@@ -11,6 +11,7 @@ import torch
 import numpy as np
 import vtk.numpy_interface.dataset_adapter as dsa
 from vtk.util.numpy_support import vtk_to_numpy
+from pytorch3d.transforms import Transform3d
 
 def get_points_from_vtk(file):
     """
@@ -213,3 +214,71 @@ def local_to_global_space(pose_t, bounds):
     :return: torch.Tensor, (N, 3)
     """
     return torch.multiply(pose_t, bounds)
+
+def generate_random_params_index(device, batch, index):
+    """
+    Generate a torch.Tensor of values at index
+    positions in list.
+    :param device: 
+    :param batch: int, N
+    :param index: List[int], which indices to change.
+    :return: torch.Tensor, (N, 6)
+    """
+    # Generate (batch, 1) zeros or random numbers.
+    list_tensors = []
+    for i in range(6):
+        if i in index:
+            list_tensors.append(torch.randn((batch, 1), device=device))
+        else:
+            list_tensors.append(torch.zeros((batch, 1), device=device))
+    return torch.cat(list_tensors, dim=1)
+
+def generate_ordered_params_index(device, batch, index, start, stop):
+    """
+    Generate a torch.Tensor of values at index
+    positions with start, stop of len batch.
+    :param device: 
+    :param batch: int, N
+    :param index: List[int], which indices to change
+    :param start: List[float], start point
+    :param end: List[float], end point of range
+    :return: torch.Tensor, (N, 6)
+    """
+    # Generate (batch, 1) zeros or ordered list.
+    list_tensors = []
+    for i in range(6):
+        if i in index:
+            list_tensors.append(torch.transpose(torch.linspace(start=start[i],
+                                                end=stop[i],
+                                                steps=batch,
+                                                device=device).expand(1, -1),
+                                                1, 0))
+        else:
+            list_tensors.append(torch.zeros((batch, 1), device=device))
+    return torch.cat(list_tensors, dim=1)
+
+def generate_transforms(device, batch, tensor_params=None):
+    """
+    Generate a set of (N, 4, 4) torch.Tensors.
+    :param device: torch.device
+    :param batch: int, N
+    :param tensor_params: torch.Tensor (N, 6)
+    :return: Transform3d
+    """
+    if not tensor_params:
+        # Generate random values between -10 and 10
+        tensor_params = (20)*torch.rand((batch, 6), device=device) + -10
+
+    rot_x_vals, rot_y_vals, rot_z_vals, t_xyz =\
+        torch.split(tensor_params, [1,1,1,3], 1)
+
+    # Compose matrices
+    transforms =\
+        Transform3d(device=device).rotate_axis_angle(
+                                            torch.squeeze(rot_z_vals), "Z"
+                                            ).rotate_axis_angle(
+                                                torch.squeeze(rot_y_vals), "Y"
+                                                ).rotate_axis_angle(
+                                                    torch.squeeze(rot_x_vals), "X"
+                                                    ).translate(t_xyz)
+    return transforms
