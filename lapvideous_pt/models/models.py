@@ -212,9 +212,8 @@ class LapVideoUS(nn.Module):
                           - [verts_probe_batch, batch_faces_probe, batch_textures_probe]
         :param transform_p2c: torch.Tensor, [N, 4, 4]
         :param transform_l2c: torch.Tensor, [N, 4, 4]
-        :return: [image, us], torch.Tensors for image and video data.
-                 - (N, Ch_vid, H_vid, W_vid),
-                 - (N, Ch_us, H_us, W_us),
+        :return: torch.Tensor for image and video data.
+                 - (N, Ch_vid, H_vid, W_vid), 0:4 video, 4:7 US.
         """
 
         # We pass some p2c and l2c into the forward function.
@@ -288,7 +287,7 @@ class LapVideoUS(nn.Module):
                           - [verts_probe_batch, batch_faces_probe, batch_textures_probe]
         :param data: torch.Tensor, (N, Ch, H, W),
                      image from GT rendering.
-        :return: [loss_im, image_pred, us_pred]
+        :return: [loss_im, tensor_pred]
         """
 
         #### NETWORKS
