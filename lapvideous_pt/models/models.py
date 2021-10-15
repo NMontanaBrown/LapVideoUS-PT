@@ -162,13 +162,14 @@ class LapVideoUS(nn.Module):
                    "origin":origin}
         self.us_dict = us_dict
 
-    def render_data(self, transform_l2c, transform_p2c):
+    def prep_input_data_for_render(self):
         """
-        Generate some data based on a given set
-        of transforms.
-        :param transform_p2c: torch.Tensor, [N, 4, 4]
-        :param transform_l2c: torch.Tensor, [N, 4, 4]
-        :return: [image, us], torch.Tensors
+        Get mesh data and pre-process it for
+        rendering. This way we only generate one batch
+        of video rendering objects once, and avoid
+        re-calling it each rendering instance.
+        :return: [liver_verts, liver_faces, liver_textures],
+                 [probe_verts, probe_faces, probe_textures]
         """
         # Base rendering objects - Video
         verts_liver = self.video_loader.meshes["liver"]["verts"].to(self.device) # (1, L, 3)
@@ -184,12 +185,26 @@ class LapVideoUS(nn.Module):
         batch_faces_probe = faces_probe.repeat(self.batch, 1, 1).to(self.device)
         verts_liver_batch = verts_liver.repeat(self.batch, 1, 1).to(self.device) # (N, P, 3)
         verts_probe_batch = verts_probe.repeat(self.batch, 1, 1).to(self.device) # (N, P, 3)
-        # Base rendering objects - US
-        image_dim = self.us_dict["image_dim"]
-        pixel_size = self.us_dict["pixel_size"]
-        voxel_size = self.us_dict["voxel_size"]
-        origin = self.us_dict["origin"]
-        volume = self.us_dict["volume"]
+        return [verts_liver_batch, batch_faces_liver, batch_textures_liver], \
+               [verts_probe_batch, batch_faces_probe, batch_textures_probe]
+
+    def render_data(self,
+                    liver_data,
+                    transform_l2c,
+                    transform_p2c):
+        """
+        Generate some image data based on a given set
+        of transforms and rendering data tensors.
+        :param liver_data: List[List[torch.Tensor]], (2,), data for differentiable
+                           video rendering:
+                          - [verts_liver_batch, batch_faces_liver, batch_textures_liver]
+                          - [verts_probe_batch, batch_faces_probe, batch_textures_probe]
+        :param transform_p2c: torch.Tensor, [N, 4, 4]
+        :param transform_l2c: torch.Tensor, [N, 4, 4]
+        :return: [image, us], torch.Tensors for image and video data.
+                 - (N, Ch_vid, H_vid, W_vid),
+                 - (N, Ch_us, H_us, W_us),
+        """
 
         # Modify transforms p2c, l2c by perturbing them by some degree. For now we
         # use the original transform to demo.
@@ -214,19 +229,19 @@ class LapVideoUS(nn.Module):
         # Generate probe meshes
         verts_probe_unbatched = lvvmu.batch_verts_transformation(transform_c2l,
                                                                  transform_p2c_perturbed,
-                                                                 verts_probe_batch,
+                                                                 liver_data[1][0],
                                                                  self.batch,
                                                                  self.device)
-        verts_liver_unbatched = torch.split(verts_liver_batch,  [1 for i in range(self.batch)], 0)
-        faces_liver_unbatched = torch.split(batch_faces_liver,  [1 for i in range(self.batch)], 0)
-        faces_probe_unbatched = torch.split(batch_faces_probe,  [1 for i in range(self.batch)], 0)
+        verts_liver_unbatched = torch.split(liver_data[0][0],  [1 for i in range(self.batch)], 0)
+        faces_liver_unbatched = torch.split(liver_data[0][1],  [1 for i in range(self.batch)], 0)
+        faces_probe_unbatched = torch.split(liver_data[1][1],  [1 for i in range(self.batch)], 0)
         # Create list of N meshes with both liver and probe.
         batch_meshes = lvvmu.generate_composite_probe_and_liver_meshes(verts_liver_unbatched,
                                                                        faces_liver_unbatched,
-                                                                       batch_textures_liver,
+                                                                       liver_data[0][2],
                                                                        verts_probe_unbatched,
                                                                        faces_probe_unbatched,
-                                                                       batch_textures_probe,
+                                                                       liver_data[1][2],
                                                                        self.batch)
         # Normalise in openCV space
         t_p2l_norm = vru.global_to_local_space(t_p2l_cv, self.bounds)
@@ -236,28 +251,34 @@ class LapVideoUS(nn.Module):
         # Render image
         image = self.video_loader.renderer(meshes_world=batch_meshes, R=r_l2c, T=t_l2c) # (N, B, W, Ch)
         # Render US
-        us = lvusg.slice_volume(image_dim,
-                                pixel_size,
+        # Base rendering objects - US
+        us = lvusg.slice_volume(self.us_dict["image_dim"],
+                                self.us_dict["pixel_size"],
                                 M_p2l_slicesampler,
-                                voxel_size,
-                                origin,
-                                volume,
+                                self.us_dict["voxel_size"],
+                                self.us_dict["origin"],
+                                self.us_dict["volume"],
                                 self.batch,
                                 self.device)
         return image, us
 
-    def forward(self, data):
+    def forward(self, liver_data, image_data):
         """
         Defines forward pass.
         Pass data through model.
         Re-render calculated poses.
         Calculate loss.
-        :param data: torch.Tensor, (N, Ch, H, W)
+        :param liver_data: List[List[torch.Tensor]], (2,), data for differentiable
+                           video rendering:
+                          - [verts_liver_batch, batch_faces_liver, batch_textures_liver]
+                          - [verts_probe_batch, batch_faces_probe, batch_textures_probe]
+        :param data: torch.Tensor, (N, Ch, H, W),
+                     image from GT rendering.
         :return: [loss_im, image_pred, us_pred]
         """
 
         #### NETWORKS
-        out = F.relu(self.conv1(data))
+        out = F.relu(self.conv1(image_data))
         out = F.relu(self.conv2(out))
         out = F.relu(self.pool(out))
         out = F.relu(self.conv4(out))
@@ -288,11 +309,12 @@ class LapVideoUS(nn.Module):
 
         transform_l2c_pred = c2l_pytorch3d.inverse()
         transform_p2c_pred = p2l_pytorch3d.compose(transform_l2c_pred)
-        image_pred, us_pred = self.render_data(transform_p2c=transform_p2c_pred.get_matrix(),
+        image_pred, us_pred = self.render_data(liver_data=liver_data,
+                                               transform_p2c=transform_p2c_pred.get_matrix(),
                                                transform_l2c=transform_l2c_pred.get_matrix())
 
         #### CALCULATE LOSS
         loss_us = torch.nn.MSELoss()
         # loss_u = loss_us(data, us_pred)
-        loss_im = loss_us(data, torch.transpose(image_pred, 3, 1))
+        loss_im = loss_us(image_data, torch.transpose(image_pred, 3, 1))
         return loss_im, image_pred, us_pred
