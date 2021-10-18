@@ -275,14 +275,6 @@ def generate_transforms(device, batch, tensor_params=None):
         torch.split(tensor_params, [1,1,1,3], 1)
 
     # Compose matrices
-    transforms =\
-        Transform3d(device=device).rotate_axis_angle(
-                                            torch.squeeze(rot_z_vals), "Z"
-                                            ).rotate_axis_angle(
-                                                torch.squeeze(rot_x_vals), "X"
-                                                ).rotate_axis_angle(
-                                                    torch.squeeze(rot_y_vals), "Y"
-                                                    ).translate(t_xyz)
     transform_t = Transform3d(device=device).translate(t_xyz)
     transform_rot_y = Transform3d(device=device).rotate_axis_angle(
                                                     torch.squeeze(rot_y_vals), "Y")
