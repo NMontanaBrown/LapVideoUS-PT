@@ -215,20 +215,22 @@ def local_to_global_space(pose_t, bounds):
     """
     return torch.multiply(pose_t, bounds)
 
-def generate_random_params_index(device, batch, index):
+def generate_random_params_index(device, batch, index, start, stop):
     """
     Generate a torch.Tensor of values at index
     positions in list.
     :param device: 
     :param batch: int, N
     :param index: List[int], which indices to change.
+    :param start: List[float]
+    :param stop: List[float]
     :return: torch.Tensor, (N, 6)
     """
     # Generate (batch, 1) zeros or random numbers.
     list_tensors = []
     for i in range(6):
         if i in index:
-            list_tensors.append(torch.randn((batch, 1), device=device))
+            list_tensors.append((start[index.index(i)]-stop[index.index(i)])*torch.randn((batch, 1), device=device) + start[index.index(i)])
         else:
             list_tensors.append(torch.zeros((batch, 1), device=device))
     return torch.cat(list_tensors, dim=1)
@@ -265,7 +267,7 @@ def generate_transforms(device, batch, tensor_params=None):
     :param tensor_params: torch.Tensor (N, 6)
     :return: Transform3d
     """
-    if not tensor_params:
+    if tensor_params is None:
         # Generate random values between -10 and 10
         tensor_params = (20)*torch.rand((batch, 6), device=device) + -10
 
@@ -277,8 +279,39 @@ def generate_transforms(device, batch, tensor_params=None):
         Transform3d(device=device).rotate_axis_angle(
                                             torch.squeeze(rot_z_vals), "Z"
                                             ).rotate_axis_angle(
-                                                torch.squeeze(rot_y_vals), "Y"
+                                                torch.squeeze(rot_x_vals), "X"
                                                 ).rotate_axis_angle(
-                                                    torch.squeeze(rot_x_vals), "X"
+                                                    torch.squeeze(rot_y_vals), "Y"
                                                     ).translate(t_xyz)
-    return transforms
+    transform_t = Transform3d(device=device).translate(t_xyz)
+    transform_rot_y = Transform3d(device=device).rotate_axis_angle(
+                                                    torch.squeeze(rot_y_vals), "Y")
+    transform_rot_z = Transform3d(device=device).rotate_axis_angle(
+                                                    torch.squeeze(rot_z_vals), "Z")
+    transform_rot_x = Transform3d(device=device).rotate_axis_angle(
+                                                    torch.squeeze(rot_x_vals), "X")
+    rot_transforms = Transform3d(device=device).compose(transform_rot_y, transform_rot_x, transform_rot_z)
+    return Transform3d(matrix=rot_transforms.get_matrix().double()), Transform3d(matrix=transform_t.get_matrix().double())
+
+def perturb_orig_matrices(transform_l2c,
+                          transform_p2c,
+                          perturbations_c2l_r,
+                          perturbations_c2l_t,
+                          perturbations_p2l_r,
+                          perturbations_p2l_t):
+    """
+    :param transform_l2c: Transform3d object
+    :param transform_p2c: Transform3d object
+    :param perturbations_c2l: Transform3d object
+    :param perturbations_p2l: Transform3d object
+    """
+    # Perturb l2c by applying perturbations in world space to c2l, and invert.
+    transform_l2c_perturbed = transform_l2c.inverse().compose(perturbations_c2l_r,
+                                                    perturbations_c2l_t,
+                                                    ).inverse()
+    # Perturb position of probe by modifying p2l GT
+    p2l = transform_p2c.compose(transform_l2c.inverse())
+    perturbed_p2l = p2l.compose(perturbations_p2l_r, perturbations_p2l_t)
+    # p2c = (l2c) @ (p2l) [Vertices] in OpenCV
+    transform_p2c_perturbed = perturbed_p2l.compose(transform_l2c_perturbed)
+    return transform_l2c_perturbed, transform_p2c_perturbed

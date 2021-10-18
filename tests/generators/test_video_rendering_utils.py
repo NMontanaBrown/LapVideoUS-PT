@@ -5,10 +5,12 @@ Testing transformations
 """
 
 import os
+import pytest
 import numpy as np
 import torch
 from pytorch3d.transforms import Transform3d
 import lapvideous_pt.generators.video_generation.utils as vru
+from sksurgeryvtk.utils.matrix_utils import create_matrix_from_list 
 
 def test_opencv_opengl_opencv():
     """
@@ -172,7 +174,7 @@ def test_gen_random_params_index():
     at appropriate indices.
     """
     device = torch.device("cpu")
-    generated_values = vru.generate_random_params_index(device, 4, [0, 3])
+    generated_values = vru.generate_random_params_index(device, 4, [0, 3], [10, 10], [20,20])
     split_values = torch.split(generated_values, [1,1,1,1,1,1], 1)
     # Check indices not at 0, 3 are zeross
     assert np.allclose(split_values[1].numpy(), split_values[-1].numpy())
@@ -193,3 +195,387 @@ def test_generate_transforms():
     device = torch.device("cpu")
     generated_values = vru.generate_transforms(device, 3, None)
     return True
+
+@pytest.mark.parametrize("transform_list_r, transform_list_t, transform_list_both", [
+                         ([10,10,10,0,0,0],[0,0,0,10,10,10], [10,10,10,10,10,10]),
+                         ([-10,-10,-10,0,0,0],[0,0,0, -10,-10,-10], [-10,-10,-10,-10,-10,-10]) 
+])
+def test_generate_transforms_regression(transform_list_r, transform_list_t,transform_list_both):
+    """
+    Check that by using vtk utils to generate some
+    transforms we get the same as with pytorch
+    """
+    device = torch.device("cpu")
+    # Generate a rotation of 10 degrees
+    # And a translation of 10 mm in all directions.
+    mat_c2l_r = create_matrix_from_list(transform_list_r,
+                                       is_in_radians=False)
+    mat_c2l_t = create_matrix_from_list(transform_list_t,
+                                       is_in_radians=False)
+    rot_c2l, t_c2l = vru.generate_transforms(device, 1, torch.from_numpy(np.array([transform_list_both], dtype=np.float64)))
+    rot_c2l, _ = vru.split_opengl_hom_matrix(rot_c2l.get_matrix())
+    _, t_c2l = vru.split_opengl_hom_matrix(t_c2l.get_matrix())
+
+    _, rot_c2l_opencv, t_c2l_opencv = vru.opengl_to_opencv_p2l(rot_c2l, t_c2l, device)
+    assert np.allclose(rot_c2l_opencv.numpy(), mat_c2l_r[:3, :3])
+    assert np.allclose(t_c2l_opencv.numpy(), mat_c2l_t[:3, 3])
+
+@pytest.mark.parametrize("transform_list_t, transform_list_both", [
+                         ([0,0,0,10,10,10], [0,0,0,10,10,10]),
+                         ([0,0,0, -10,-10,-10], [0,0,0,-10,-10,-10]) 
+])
+def test_perturb_orig_matrices_regression_t_l2c(transform_list_t, transform_list_both):
+    """
+    Testing that if we apply a translation to the original matrix we can
+    recover the same as sksurgery-vtk
+    """
+    device = torch.device("cpu")
+    # L2c
+    test_matrix_l2c = np.loadtxt("tests/data/spp_liver2camera.txt")
+    test_matrix_c2l = np.linalg.inv(test_matrix_l2c)
+    test_matrix_l2c = np.expand_dims(test_matrix_l2c, 0)
+    r = test_matrix_l2c[:, :3, :3]
+    t = test_matrix_l2c[:, :3, 3]
+    test_matrix_l2c_torch_r = torch.from_numpy(r)
+    test_matrix_l2c_torch_t = torch.from_numpy(t)
+    M_l2c, _, _ = vru.opencv_to_opengl(test_matrix_l2c_torch_r, test_matrix_l2c_torch_t, device)
+    # c2l perturb using sksurgery vtk
+    mat_c2l_t = create_matrix_from_list(transform_list_t,
+                                       is_in_radians=False)
+    transformed_c2l_numpy = mat_c2l_t @ test_matrix_c2l
+    _, t_c2l = vru.generate_transforms(device, 1, torch.from_numpy(np.array([transform_list_both], dtype=np.float64)))
+    # Transform c2l using rot
+    l2c_transform3d = Transform3d(matrix=M_l2c.double(), device=device)
+    permuted_l2c = Transform3d(device=device, dtype=torch.double).compose(
+                                                                  l2c_transform3d.inverse(),
+                                                                  Transform3d(matrix=t_c2l.get_matrix().double())
+                                                                  ).inverse()
+    # Should give the same matrix
+    permuted_l2c_r, permuted_l2c_t = vru.split_opengl_hom_matrix(permuted_l2c.get_matrix())
+    M_l2c_permuted_cv,_,_ = vru.opengl_to_opencv(permuted_l2c_r, permuted_l2c_t, device)
+    print("\nTransform l2c from opengl to opencv: \n", M_l2c_permuted_cv.numpy())
+    print("\nTransform l2c using vtk: \n", np.linalg.inv(transformed_c2l_numpy))
+    assert np.allclose(M_l2c_permuted_cv.numpy(), np.linalg.inv(transformed_c2l_numpy))
+
+def test_perturb_orig_matrices_regression_t_p2l():
+    """
+    Testing that if we apply a translation to the original matrix we can
+    recover the same as sksurgery-vtk
+    """
+    device = torch.device("cpu")
+    # L2c
+    test_matrix_p2c = np.loadtxt("tests/data/spp_probe2camera.txt")
+    test_matrix_p2c = np.expand_dims(test_matrix_p2c, 0)
+    r = test_matrix_p2c[:, :3, :3]
+    t = test_matrix_p2c[:, :3, 3]
+    test_matrix_p2c_torch_r = torch.from_numpy(r)
+    test_matrix_p2c_torch_t = torch.from_numpy(t)
+    M_p2c, _, _ = vru.opencv_to_opengl(test_matrix_p2c_torch_r, test_matrix_p2c_torch_t, device)
+    test_matrix_l2c = np.loadtxt("tests/data/spp_liver2camera.txt")
+    test_matrix_c2l = np.linalg.inv(test_matrix_l2c)
+    test_matrix_l2c = np.expand_dims(test_matrix_l2c, 0)
+    r = test_matrix_l2c[:, :3, :3]
+    t = test_matrix_l2c[:, :3, 3]
+    test_matrix_l2c_torch_r = torch.from_numpy(r)
+    test_matrix_l2c_torch_t = torch.from_numpy(t)
+    M_l2c, _, _ = vru.opencv_to_opengl(test_matrix_l2c_torch_r, test_matrix_l2c_torch_t, device)
+    # c2l perturb using sksurgery vtk
+    mat_c2l_t = create_matrix_from_list([0,0,0,10,10,10],
+                                       is_in_radians=False)
+    transformed_c2l_numpy = mat_c2l_t @ test_matrix_c2l
+    perturbed_p2l = transformed_c2l_numpy @ test_matrix_p2c
+    _, t_c2l = vru.generate_transforms(device, 1, torch.from_numpy(np.array([[10,10,10,10,10,10]], dtype=np.float64)))
+    # Transform c2l using rot
+    l2c_transform3d = Transform3d(matrix=M_l2c.double(), device=device)
+    permuted_l2c = Transform3d(device=device, dtype=torch.double).compose(
+                                                                  l2c_transform3d.inverse(),
+                                                                  Transform3d(matrix=t_c2l.get_matrix().double())
+                                                                  ).inverse()
+    # Transform p2c using rot
+    p2c_transform3d = Transform3d(matrix=M_p2c.double(), device=device)
+    permuted_p2l = Transform3d(device=device, dtype=torch.double).compose(
+                                                                  p2c_transform3d,
+                                                                  permuted_l2c.inverse(),
+                                                                  )
+    # Should give the same matrix
+    permuted_p2l_r, permuted_p2l_t = vru.split_opengl_hom_matrix(permuted_p2l.get_matrix())
+    M_p2l_permuted_cv,_,_ = vru.opengl_to_opencv_p2l(permuted_p2l_r, permuted_p2l_t, device)
+    print("\nTransform p2l from opengl to opencv: \n", M_p2l_permuted_cv.numpy())
+    print("\nTransform p2l using vtk: \n", perturbed_p2l)
+    assert np.allclose(M_p2l_permuted_cv.numpy(), perturbed_p2l)
+
+def test_perturb_orig_matrices_regression_r_p2l():
+    """
+    Testing that if we apply a translation to the original matrix we can
+    recover the same as sksurgery-vtk
+    """
+    device = torch.device("cpu")
+    # L2c
+    test_matrix_p2c = np.loadtxt("tests/data/spp_probe2camera.txt")
+    test_matrix_p2c = np.expand_dims(test_matrix_p2c, 0)
+    r = test_matrix_p2c[:, :3, :3]
+    t = test_matrix_p2c[:, :3, 3]
+    test_matrix_p2c_torch_r = torch.from_numpy(r)
+    test_matrix_p2c_torch_t = torch.from_numpy(t)
+    M_p2c, _, _ = vru.opencv_to_opengl(test_matrix_p2c_torch_r, test_matrix_p2c_torch_t, device)
+    test_matrix_l2c = np.loadtxt("tests/data/spp_liver2camera.txt")
+    test_matrix_c2l = np.linalg.inv(test_matrix_l2c)
+    test_matrix_l2c = np.expand_dims(test_matrix_l2c, 0)
+    r = test_matrix_l2c[:, :3, :3]
+    t = test_matrix_l2c[:, :3, 3]
+    test_matrix_l2c_torch_r = torch.from_numpy(r)
+    test_matrix_l2c_torch_t = torch.from_numpy(t)
+    M_l2c, _, _ = vru.opencv_to_opengl(test_matrix_l2c_torch_r, test_matrix_l2c_torch_t, device)
+    # c2l perturb using sksurgery vtk
+    mat_c2l_r = create_matrix_from_list([10,10,10,0,0,0],
+                                       is_in_radians=False)
+    transformed_c2l_numpy = mat_c2l_r @ test_matrix_c2l
+    perturbed_p2l = transformed_c2l_numpy @ test_matrix_p2c
+    r_c2l, _ = vru.generate_transforms(device, 1, torch.from_numpy(np.array([[10,10,10,10,10,10]], dtype=np.float64)))
+    # Transform c2l using rot
+    l2c_transform3d = Transform3d(matrix=M_l2c.double(), device=device)
+    permuted_l2c = Transform3d(device=device, dtype=torch.double).compose(
+                                                                  l2c_transform3d.inverse(),
+                                                                  Transform3d(matrix=r_c2l.get_matrix().double())
+                                                                  ).inverse()
+    # Transform p2c using rot
+    p2c_transform3d = Transform3d(matrix=M_p2c.double(), device=device)
+    permuted_p2l = Transform3d(device=device, dtype=torch.double).compose(
+                                                                  p2c_transform3d,
+                                                                  permuted_l2c.inverse(),
+                                                                  )
+    # Should give the same matrix
+    permuted_p2l_r, permuted_p2l_t = vru.split_opengl_hom_matrix(permuted_p2l.get_matrix())
+    M_p2l_permuted_cv,_,_ = vru.opengl_to_opencv_p2l(permuted_p2l_r, permuted_p2l_t, device)
+    print("\nTransform p2l from opengl to opencv: \n", M_p2l_permuted_cv.numpy())
+    print("\nTransform p2l using vtk: \n", perturbed_p2l)
+    assert np.allclose(M_p2l_permuted_cv.numpy(), perturbed_p2l)
+
+def test_perturb_orig_matrices_regression_r_l2c():
+    """
+    Testing that if we apply a rotation to the original matrix we can
+    recover the same as sksurgery-vtk
+    """
+    device = torch.device("cpu")
+    # L2c
+    test_matrix_l2c = np.loadtxt("tests/data/spp_liver2camera.txt")
+    test_matrix_c2l = np.linalg.inv(test_matrix_l2c)
+    test_matrix_l2c = np.expand_dims(test_matrix_l2c, 0)
+    r = test_matrix_l2c[:, :3, :3]
+    t = test_matrix_l2c[:, :3, 3]
+    test_matrix_l2c_torch_r = torch.from_numpy(r)
+    test_matrix_l2c_torch_t = torch.from_numpy(t)
+    M_l2c, _, _ = vru.opencv_to_opengl(test_matrix_l2c_torch_r, test_matrix_l2c_torch_t, device)
+    # c2l perturb using sksurgery vtk
+    mat_c2l_r = create_matrix_from_list([10,10,10,0,0,0],
+                                       is_in_radians=False)
+    transformed_c2l_numpy = mat_c2l_r @ test_matrix_c2l
+    r_c2l, _ = vru.generate_transforms(device, 1, torch.from_numpy(np.array([[10,10,10,10,10,10]], dtype=np.float64)))
+    # Transform c2l using rot and 2
+    l2c_transform3d = Transform3d(matrix=M_l2c.double(), device=device)
+    permuted_l2c = Transform3d(device=device, dtype=torch.double).compose(
+                                                                  l2c_transform3d.inverse(),
+                                                                  Transform3d(matrix=r_c2l.get_matrix().double())
+                                                                  ).inverse()
+    permuted_l2c_r, permuted_l2c_t = vru.split_opengl_hom_matrix(permuted_l2c.get_matrix())
+    M_l2c_permuted_cv,_,_ = vru.opengl_to_opencv(permuted_l2c_r, permuted_l2c_t, device)
+    print("\nTransform l2c from opengl to opencv: \n", M_l2c_permuted_cv.numpy())
+    print("\nTransform l2c using vtk: \n", np.linalg.inv(transformed_c2l_numpy))
+    assert np.allclose(M_l2c_permuted_cv.numpy(), np.linalg.inv(transformed_c2l_numpy))
+
+def test_perturb_orig_matrices_regression_rt_l2c():
+    """
+    Testing that if we apply a translation to the original matrix we can
+    recover the same as sksurgery-vtk
+    """
+    device = torch.device("cpu")
+    # L2c
+    test_matrix_l2c = np.loadtxt("tests/data/spp_liver2camera.txt")
+    test_matrix_c2l = np.linalg.inv(test_matrix_l2c)
+    test_matrix_l2c = np.expand_dims(test_matrix_l2c, 0)
+    r = test_matrix_l2c[:, :3, :3]
+    t = test_matrix_l2c[:, :3, 3]
+    test_matrix_l2c_torch_r = torch.from_numpy(r)
+    test_matrix_l2c_torch_t = torch.from_numpy(t)
+    M_l2c, _, _ = vru.opencv_to_opengl(test_matrix_l2c_torch_r, test_matrix_l2c_torch_t, device)
+    # c2l perturb using sksurgery vtk
+    mat_c2l_r = create_matrix_from_list([10,10,10,0,0,0],
+                                       is_in_radians=False)
+    mat_c2l_t = create_matrix_from_list([0,0,0,10,10,10],
+                                       is_in_radians=False)
+    transformed_c2l_numpy = mat_c2l_t @ mat_c2l_r @ test_matrix_c2l 
+    r_c2l, t_c2l = vru.generate_transforms(device, 1, torch.from_numpy(np.array([[10,10,10,10,10,10]], dtype=np.float64)))
+    # Transform c2l using rot and 2
+    l2c_transform3d = Transform3d(matrix=M_l2c.double(), device=device)
+    permuted_l2c = Transform3d(device=device, dtype=torch.double).compose(
+                                                                  l2c_transform3d.inverse(),
+                                                                  Transform3d(matrix=r_c2l.get_matrix().double()),
+                                                                  Transform3d(matrix=t_c2l.get_matrix().double()),
+                                                                  ).inverse()
+
+    permuted_l2c_r, permuted_l2c_t = vru.split_opengl_hom_matrix(permuted_l2c.get_matrix())
+    M_l2c_permuted_cv,_,_ = vru.opengl_to_opencv(permuted_l2c_r, permuted_l2c_t, device)
+    print("\nTransform l2c from opengl to opencv: \n", M_l2c_permuted_cv.numpy())
+    print("\nTransform l2c using vtk: \n", np.linalg.inv(transformed_c2l_numpy))
+    assert np.allclose(M_l2c_permuted_cv.numpy(), np.linalg.inv(transformed_c2l_numpy))
+
+def test_perturb_orig_matrices_regression_rt_p2l():
+    """
+    Testing that if we apply a translation to the original matrix we can
+    recover the same as sksurgery-vtk
+    """
+    device = torch.device("cpu")
+    # L2c
+    test_matrix_p2c = np.loadtxt("tests/data/spp_probe2camera.txt")
+    test_matrix_p2c = np.expand_dims(test_matrix_p2c, 0)
+    r = test_matrix_p2c[:, :3, :3]
+    t = test_matrix_p2c[:, :3, 3]
+    test_matrix_p2c_torch_r = torch.from_numpy(r)
+    test_matrix_p2c_torch_t = torch.from_numpy(t)
+    M_p2c, _, _ = vru.opencv_to_opengl(test_matrix_p2c_torch_r, test_matrix_p2c_torch_t, device)
+    test_matrix_l2c = np.loadtxt("tests/data/spp_liver2camera.txt")
+    test_matrix_c2l = np.linalg.inv(test_matrix_l2c)
+    test_matrix_l2c = np.expand_dims(test_matrix_l2c, 0)
+    r = test_matrix_l2c[:, :3, :3]
+    t = test_matrix_l2c[:, :3, 3]
+    test_matrix_l2c_torch_r = torch.from_numpy(r)
+    test_matrix_l2c_torch_t = torch.from_numpy(t)
+    M_l2c, _, _ = vru.opencv_to_opengl(test_matrix_l2c_torch_r, test_matrix_l2c_torch_t, device)
+    # c2l perturb using sksurgery vtk
+    mat_c2l_r = create_matrix_from_list([10,10,10,10,10,10],
+                                       is_in_radians=False)
+    transformed_c2l_numpy = mat_c2l_r @ test_matrix_c2l
+    perturbed_p2l = transformed_c2l_numpy @ test_matrix_p2c
+    r_c2l, t_c2l = vru.generate_transforms(device, 1, torch.from_numpy(np.array([[10,10,10,10,10,10]], dtype=np.float64)))
+    # Transform c2l using rot
+    l2c_transform3d = Transform3d(matrix=M_l2c.double(), device=device)
+    permuted_l2c = Transform3d(device=device, dtype=torch.double).compose(
+                                                                  l2c_transform3d.inverse(),
+                                                                  Transform3d(matrix=r_c2l.get_matrix().double()),
+                                                                  Transform3d(matrix=t_c2l.get_matrix().double())
+                                                                  ).inverse()
+    # Transform p2c using rot
+    p2c_transform3d = Transform3d(matrix=M_p2c.double(), device=device)
+    permuted_p2l = Transform3d(device=device, dtype=torch.double).compose(
+                                                                  p2c_transform3d,
+                                                                  permuted_l2c.inverse(),
+                                                                  )
+    # Should give the same matrix
+    permuted_p2l_r, permuted_p2l_t = vru.split_opengl_hom_matrix(permuted_p2l.get_matrix())
+    M_p2l_permuted_cv,_,_ = vru.opengl_to_opencv_p2l(permuted_p2l_r, permuted_p2l_t, device)
+    print("\nTransform p2l from opengl to opencv: \n", M_p2l_permuted_cv.numpy())
+    print("\nTransform p2l using vtk: \n", perturbed_p2l)
+    assert np.allclose(M_p2l_permuted_cv.numpy(), perturbed_p2l)
+
+
+def test_perturb_orig_matrices_regression_rt_combined():
+    """
+    Testing that if we apply two sets of transformations
+    to the original p2l and c2l at the same time
+    recover the same as sksurgery-vtk.
+    """
+    device = torch.device("cpu")
+    # L2c
+    test_matrix_p2c = np.loadtxt("tests/data/spp_probe2camera.txt")
+    test_matrix_l2c = np.loadtxt("tests/data/spp_liver2camera.txt")
+    test_matrix_p2l = np.linalg.inv(test_matrix_l2c) @ test_matrix_p2c
+
+    test_matrix_c2l = np.linalg.inv(test_matrix_l2c)
+    test_matrix_l2c = np.expand_dims(test_matrix_l2c, 0)
+    r = test_matrix_l2c[:, :3, :3]
+    t = test_matrix_l2c[:, :3, 3]
+    test_matrix_l2c_torch_r = torch.from_numpy(r)
+    test_matrix_l2c_torch_t = torch.from_numpy(t)
+    M_l2c, _, _ = vru.opencv_to_opengl(test_matrix_l2c_torch_r, test_matrix_l2c_torch_t, device)
+
+    # c2l perturb using sksurgery vtk
+    mat_c2l_r = create_matrix_from_list([10,10,10,10,10,10],
+                                       is_in_radians=False)
+    transformed_c2l_numpy = mat_c2l_r @ test_matrix_c2l
+
+    test_matrix_p2l = np.expand_dims(test_matrix_p2l, 0)
+    r = test_matrix_p2l[:, :3, :3]
+    t = test_matrix_p2l[:, :3, 3]
+    test_matrix_p2l_torch_r = torch.from_numpy(r)
+    test_matrix_p2l_torch_t = torch.from_numpy(t)
+    M_p2l, _, _ = vru.opencv_to_opengl_p2l(test_matrix_p2l_torch_r, test_matrix_p2l_torch_t, device)
+    # c2l perturb using sksurgery vtk
+    mat_p2l_r = create_matrix_from_list([10,10,10,10,10,10],
+                                       is_in_radians=False)
+    transformed_p2l_numpy = mat_p2l_r @ test_matrix_p2l
+
+    perturbed_p2c = np.linalg.inv(transformed_c2l_numpy) @ transformed_p2l_numpy
+    r_c2l, t_c2l = vru.generate_transforms(device, 1, torch.from_numpy(np.array([[10,10,10,10,10,10]], dtype=np.float64)))
+    r_p2l, t_p2l = vru.generate_transforms(device, 1, torch.from_numpy(np.array([[10,10,10,10,10,10]], dtype=np.float64)))
+    # Transform c2l using rot
+    l2c_transform3d = Transform3d(matrix=M_l2c.double(), device=device)
+    permuted_l2c = Transform3d(device=device, dtype=torch.double).compose(
+                                                                  l2c_transform3d.inverse(),
+                                                                  Transform3d(matrix=r_c2l.get_matrix().double()),
+                                                                  Transform3d(matrix=t_c2l.get_matrix().double())
+                                                                  ).inverse()
+    # Transform p2l using rot
+    p2l_transform3d = Transform3d(matrix=M_p2l.double(), device=device)
+    permuted_p2l = Transform3d(device=device, dtype=torch.double).compose(
+                                                                  p2l_transform3d,
+                                                                  Transform3d(matrix=r_p2l.get_matrix().double()),
+                                                                  Transform3d(matrix=t_p2l.get_matrix().double())
+                                                                  )
+    # Get p2c
+    p2c_transform3d = Transform3d(device=device, dtype=torch.double).compose(
+                                                                    permuted_p2l,
+                                                                    permuted_l2c
+                                                                    )
+    # Should give the same matrix
+    permuted_p2c_r, permuted_p2c_t = vru.split_opengl_hom_matrix(p2c_transform3d.get_matrix())
+    M_p2c_permuted_cv,_,_ = vru.opengl_to_opencv(permuted_p2c_r, permuted_p2c_t, device)
+    print("\nTransform p2c from opengl to opencv: \n", M_p2c_permuted_cv.numpy())
+    print("\nTransform p2c using vtk: \n", perturbed_p2c)
+    assert np.allclose(M_p2c_permuted_cv.numpy(), perturbed_p2c)
+
+def test_perturb_orig_matrices():
+    """
+    Testing that if we use the function
+    perturb_orig_matrices, we get the same
+    result as if we were using vtk utils
+    to generate some matrices.
+    """
+    device = torch.device("cpu")
+    r_c2l, t_c2l = vru.generate_transforms(device, 1, torch.from_numpy(np.array([[10,10,10,10,10,10]], dtype=np.float64)))
+    r_p2l, t_p2l = vru.generate_transforms(device, 1, torch.from_numpy(np.array([[10,10,10,10,10,10]], dtype=np.float64)))
+    test_matrix_p2c = np.loadtxt("tests/data/spp_probe2camera.txt")
+    test_matrix_l2c = np.loadtxt("tests/data/spp_liver2camera.txt")
+    test_matrix_p2l = np.linalg.inv(test_matrix_l2c) @ test_matrix_p2c
+
+    test_matrix_l2c = np.expand_dims(test_matrix_l2c, 0)
+    r = test_matrix_l2c[:, :3, :3]
+    t = test_matrix_l2c[:, :3, 3]
+    test_matrix_l2c_torch_r = torch.from_numpy(r).double()
+    test_matrix_l2c_torch_t = torch.from_numpy(t).double()
+    M_l2c, _, _ = vru.opencv_to_opengl(test_matrix_l2c_torch_r, test_matrix_l2c_torch_t, device)
+    l2c_transform3d = Transform3d(matrix=M_l2c.double(), device=device)
+    
+    test_matrix_p2c = np.expand_dims(test_matrix_p2c, 0)
+    r = test_matrix_p2c[:, :3, :3]
+    t = test_matrix_p2c[:, :3, 3]
+    test_matrix_p2c_torch_r = torch.from_numpy(r).double()
+    test_matrix_p2c_torch_t = torch.from_numpy(t).double()
+    M_p2c, _, _ = vru.opencv_to_opengl(test_matrix_p2c_torch_r, test_matrix_p2c_torch_t, device)
+    p2c_transform3d = Transform3d(matrix=M_p2c.double(), device=device)
+
+    transform_l2c_p, transform_p2c_p = vru.perturb_orig_matrices(l2c_transform3d, p2c_transform3d, r_c2l, t_c2l, r_p2l, t_p2l)
+    permuted_l2c_r, permuted_l2c_t = vru.split_opengl_hom_matrix(transform_l2c_p.get_matrix())
+    M_l2c_permuted_cv,_,_ = vru.opengl_to_opencv(permuted_l2c_r, permuted_l2c_t, device)
+    permuted_p2c_r, permuted_p2c_t = vru.split_opengl_hom_matrix(transform_p2c_p.get_matrix())
+    M_p2c_permuted_cv,_,_ = vru.opengl_to_opencv(permuted_p2c_r, permuted_p2c_t, device)
+
+    mat_c2l_r = create_matrix_from_list([10,10,10,10,10,10],
+                                       is_in_radians=False)
+    transformed_c2l_numpy = mat_c2l_r @ np.linalg.inv(test_matrix_l2c)
+    mat_p2l_r = create_matrix_from_list([10,10,10,10,10,10],
+                                       is_in_radians=False)
+    transformed_p2l_numpy = mat_p2l_r @ test_matrix_p2l
+
+    perturbed_p2c = np.linalg.inv(transformed_c2l_numpy) @ transformed_p2l_numpy
+    assert np.allclose(M_l2c_permuted_cv.numpy(), np.linalg.inv(transformed_c2l_numpy))
+    assert np.allclose(M_p2c_permuted_cv.numpy(), perturbed_p2c)
