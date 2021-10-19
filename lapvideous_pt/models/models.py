@@ -92,19 +92,27 @@ class LapVideoUS(nn.Module):
         """
         print("Building Model...")
         self.conv1 = nn.Conv2d(in_channels=7, out_channels=12, kernel_size=3, stride=1, padding=1) # Hout = Hin
+        self.conv1_bn=nn.BatchNorm2d(12)
         self.conv2 = nn.Conv2d(in_channels=12, out_channels=12, kernel_size=3, stride=1, padding=1) # Hout = Hin
+        self.conv2_bn=nn.BatchNorm2d(12)
         self.pool = nn.MaxPool2d(2,2)
         self.conv4 = nn.Conv2d(in_channels=12, out_channels=24, kernel_size=5, stride=1, padding=2)
+        self.conv4_bn=nn.BatchNorm2d(24)
         self.conv5 = nn.Conv2d(in_channels=24, out_channels=24, kernel_size=5, stride=1, padding=2) # Hout/2
+        self.conv5_bn=nn.BatchNorm2d(24)
         self.pool2 = nn.MaxPool2d(2,2)
         self.conv6 = nn.Conv2d(in_channels=24, out_channels=48, kernel_size=5, stride=1, padding=2)
+        self.conv6_bn=nn.BatchNorm2d(48)
         self.conv7 = nn.Conv2d(in_channels=48, out_channels=48, kernel_size=5, stride=1, padding=2)
+        self.conv7_bn=nn.BatchNorm2d(48)
         self.pool3 = nn.MaxPool2d(2,2) # Hout/8
         self.fc1 = nn.Linear(30000, 10000)
-        self.fc2 = nn.Linear(10000, 5000)
-        self.fc3 = nn.Linear(5000, 1000)
-        self.fc4 = nn.Linear(1000, 100)
-        self.fc5 = nn.Linear(100, 14)
+        self.fc_rot_1  = nn.Linear(5000, 1000)
+        self.fc_rot_2  = nn.Linear(1000, 100)
+        self.fc_rot_3  = nn.Linear(100, 8)
+        self.fc_trans_1  = nn.Linear(5000, 1000)
+        self.fc_trans_2  = nn.Linear(1000, 100)
+        self.fc_trans_3  = nn.Linear(100, 6)
         print("Model built.")
 
     def pre_process_video_files(self,
@@ -207,16 +215,15 @@ class LapVideoUS(nn.Module):
         Generate some image data based on a given set
         of transforms and rendering data tensors.
         :param liver_data: List[List[torch.Tensor]], (2,), data for differentiable
-                           video rendering:
-                          - [verts_liver_batch, batch_faces_liver, batch_textures_liver]
-                          - [verts_probe_batch, batch_faces_probe, batch_textures_probe]
+                            video rendering:
+                            - [verts_liver_batch, batch_faces_liver, batch_textures_liver]
+                            - [verts_probe_batch, batch_faces_probe, batch_textures_probe]
         :param transform_p2c: torch.Tensor, [N, 4, 4]
         :param transform_l2c: torch.Tensor, [N, 4, 4]
         :return: torch.Tensor for image and video data.
-                 - (N, Ch_vid, H_vid, W_vid), 0:4 video, 4:7 US.
+                    - (N, Ch_vid, H_vid, W_vid), 0:4 video, 4:7 US.
         """
-
-        # We pass some p2c and l2c into the forward function.
+        # We pass some p2c and l2c into the renderer.
         transform_p2c_perturbed = Transform3d(matrix=transform_p2c, device=self.device)
         transform_l2c_perturbed = Transform3d(matrix=transform_l2c, device=self.device)
         transform_c2l = transform_l2c_perturbed.inverse().to(self.device)
@@ -275,6 +282,35 @@ class LapVideoUS(nn.Module):
         image_tensor = torch.cat([torch.transpose(torch.transpose(image, 3, 1), 3, 2), us_pad], 1) # Cat along channels
         return image_tensor
 
+    def post_process_predictions(self, rot_preds, trans_preds):
+        """
+        Class method that defines how the data from predictions
+        is post processed. We assume in this case that the rotations
+        predicted are quaternions and
+        also refer to rotations that
+        are in Pytorch3d frame of reference already,
+        so we can just return the Transform3d to pass directly to the
+        renderer.
+        :param rot_preds: torch.Tensor, rotation predictions (8,)
+        :param trans_preds: torch.Tensor, translation predictions (6,)
+        :return: List[Transform3d], (2,), c2l and p2l
+        """
+        # Split rotations into two separate quaternions
+        c2l_q, p2l_q = torch.split(rot_preds, [4, 4], dim=1)
+        # Split translations into two separate vectors
+        c2l_t, p2l_t = torch.split(trans_preds, [3, 3], dim=1)
+        # Convert quats to rot matrices
+        c2l_r = p3drc.quaternion_to_matrix(c2l_q)
+        p2l_r = p3drc.quaternion_to_matrix(p2l_q)
+        c2l_t_global = vru.local_to_global_space(c2l_t, self.bounds)
+        p2l_t_global = vru.local_to_global_space(p2l_t, self.bounds)
+        p2l_opengGL = vru.cat_opengl_hom_matrix(torch.transpose(p2l_r, 2, 1), p2l_t_global, self.device)
+        c2l_openGL = vru.cat_opengl_hom_matrix(torch.transpose(c2l_r, 2, 1), c2l_t_global, self.device)
+        # Return Transform3d
+        p2l_pytorch3d = Transform3d(matrix=p2l_opengGL, device=self.device)
+        c2l_pytorch3d = Transform3d(matrix=c2l_openGL, device=self.device)
+        return c2l_pytorch3d, p2l_pytorch3d
+
     def forward(self, liver_data, image_data):
         """
         Defines forward pass.
@@ -289,45 +325,35 @@ class LapVideoUS(nn.Module):
                      image from GT rendering.
         :return: [loss_im, tensor_pred]
         """
-
         #### NETWORKS
         out = F.relu(self.conv1(image_data))
         out = F.relu(self.conv2(out))
-        out = F.relu(self.pool(out))
+        out = self.pool(out)
         out = F.relu(self.conv4(out))
         out = F.relu(self.conv5(out))
-        out = F.relu(self.pool2(out))
+        out = self.pool2(out)
         out = F.relu(self.conv6(out))
         out = F.relu(self.conv7(out))
-        out = F.relu(self.pool3(out))
+        out = self.pool3(out)
         out = torch.flatten(out, start_dim=1)
         out = F.relu(self.fc1(out))
-        out = F.relu(self.fc2(out))
-        out = F.relu(self.fc3(out))
-        out = F.relu(self.fc4(out))
-        out = F.tanh(self.fc5(out))
+        # Split network results into two branches, one for rotation
+        # and one for translation.
+        out_rot, out_trans = torch.split(out, [5000, 5000], dim=1)
+        out_rot = F.relu(self.fc_rot_1(out_rot))
+        out_rot = F.relu(self.fc_rot_2(out_rot))
+        out_rot = F.tanh(self.fc_rot_3(out_rot)) # B, 8
+        out_trans = F.relu(self.fc_trans_1(out_trans))
+        out_trans = F.relu(self.fc_trans_2(out_trans))
+        out_trans = F.tanh(self.fc_trans_3(out_trans)) # B, 6
 
-        #### POST PROCESS OUTPUTS - 14 vector of [-1, 1]
+        #### POST PROCESS OUTPUTS
         # For translations we need a representation in bounded space
-        c2l_q, c2l_t, p2l_q, p2l_t = torch.split(out, [4, 3, 4, 3], dim=1)
-        c2l_r = p3drc.quaternion_to_matrix(c2l_q)
-        p2l_r = p3drc.quaternion_to_matrix(p2l_q)
-        c2l_t_global = vru.local_to_global_space(c2l_t, self.bounds)
-        p2l_t_global = vru.local_to_global_space(p2l_t, self.bounds)
-        p2l_opengGL, _, _ = vru.opencv_to_opengl_p2l(p2l_r, p2l_t_global, self.device)
-        c2l_openGL, _, _ = vru.opencv_to_opengl(c2l_r, c2l_t_global, self.device)
-
-        p2l_pytorch3d = Transform3d(matrix=p2l_opengGL, device=self.device)
-        c2l_pytorch3d = Transform3d(matrix=c2l_openGL, device=self.device)
-
+        c2l_pytorch3d, p2l_pytorch3d = self.post_process_predictions(out_rot, out_trans)
         transform_l2c_pred = c2l_pytorch3d.inverse()
         transform_p2c_pred = p2l_pytorch3d.compose(transform_l2c_pred)
         tensor_pred = self.render_data(liver_data=liver_data,
                                        transform_p2c=transform_p2c_pred.get_matrix(),
                                        transform_l2c=transform_l2c_pred.get_matrix())
-
-        #### CALCULATE LOSS
-        loss_us = torch.nn.MSELoss()
-        # Taking complete image loss
-        loss_im = loss_us(image_data, tensor_pred)
-        return loss_im, tensor_pred
+        #### RETURN PRED IMAGE AND PRED TRANSFORMS
+        return tensor_pred, [c2l_pytorch3d, p2l_pytorch3d]
