@@ -8,6 +8,7 @@ import os
 import pytest
 import numpy as np
 import torch
+from torch.functional import split
 from pytorch3d.transforms import Transform3d
 from pytorch3d.transforms import rotation_conversions as p3drc
 import lapvideous_pt.generators.video_generation.utils as vru
@@ -168,6 +169,43 @@ def test_split_gl_hom():
     split_r_test, split_t_test = vru.split_opengl_hom_matrix(M)
     assert np.allclose(split_r.numpy(), split_r_test.numpy())
     assert np.allclose(split_t.numpy(), split_t_test.numpy())
+
+def test_split_join_gl_hom():
+    """
+    Test if we split our hom opengl
+    matrix we get the same as using
+    numpy indexations.
+    """
+    device = torch.device("cpu")
+    test_matrix_l2c = np.loadtxt("tests/data/spp_liver2camera.txt")
+    test_matrix_l2c = np.expand_dims(test_matrix_l2c, 0)
+    r = test_matrix_l2c[:, :3, :3]
+    t = test_matrix_l2c[:, :3, 3]
+    test_matrix_l2c_torch_r = torch.from_numpy(r)
+    test_matrix_l2c_torch_t = torch.from_numpy(t)
+    M, split_r, split_t = vru.opencv_to_opengl(test_matrix_l2c_torch_r, test_matrix_l2c_torch_t, device)
+    split_r_test, split_t_test = vru.split_opengl_hom_matrix(M)
+    join_M = vru.cat_opengl_hom_matrix(split_r_test, split_t_test, device)
+    join_M_orig = vru.cat_opengl_hom_matrix(split_r, split_t, device)
+    assert np.allclose(join_M, M)
+    assert np.allclose(M, join_M_orig)
+
+def test_split_join_cv_hom():
+    """
+    Test if we split our hom opencv
+    matrix we get the same as using
+    numpy indexations.
+    """
+    device = torch.device("cpu")
+    test_matrix_l2c = np.loadtxt("tests/data/spp_liver2camera.txt")
+    test_matrix_l2c = np.expand_dims(test_matrix_l2c, 0)
+    r = test_matrix_l2c[:, :3, :3]
+    t = test_matrix_l2c[:, :3, 3]
+
+    split_r, split_t = vru.split_opencv_hom_matrix(torch.from_numpy(test_matrix_l2c))
+    join_M = vru.cat_opencv_hom_matrix(split_r, split_t, device)
+
+    assert np.allclose(join_M, test_matrix_l2c)
 
 def test_gen_random_params_index():
     """

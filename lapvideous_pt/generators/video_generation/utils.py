@@ -102,11 +102,8 @@ def opengl_to_opencv_p2l(matrix_R, matrix_T, device):
     R_openCV = matrix_R.clone()
     T_openCV = matrix_T.clone()
     R_openCV = R_openCV.permute(0, 2, 1) # Transpose
+    right_handed_M = cat_opencv_hom_matrix(R_openCV, T_openCV, device)
 
-    eye = torch.eye(4, dtype=torch.float32, device=device) # Use last column
-    _, column = torch.split(eye, [3, 1])
-    right_handed_M = torch.cat((R_openCV, torch.transpose(torch.transpose(T_openCV.expand(1, -1, -1), 2, 0), 1, 0)), 2)
-    right_handed_M = torch.cat((right_handed_M, column.expand(1, -1, -1).repeat(R_openCV.shape[0], 1, 1)), 1)
     return right_handed_M, R_openCV, T_openCV
 
 def opencv_to_opengl_p2l(matrix_R, matrix_T, device):
@@ -117,14 +114,10 @@ def opencv_to_opengl_p2l(matrix_R, matrix_T, device):
     :param matrix_T: torch.Tensor [B, 3,]
     """
     R_openGL = matrix_R.clone()
-    T_openGL = torch.transpose(matrix_T.clone().expand(1, -1, -1), 1, 0) # (N, 1, 3)
     R_openGL = R_openGL.permute(0, 2, 1) # Transpose
+    T_openGL = matrix_T.clone()
+    left_handed_M = cat_opengl_hom_matrix(R_openGL, T_openGL, device)
 
-    eye = torch.eye(4, dtype=torch.float32, device=device) # Use last column
-    _, column = torch.split(eye, [3, 1])
-    column = torch.transpose(column.expand(1, -1, -1).repeat(R_openGL.shape[0], 1, 1), 2, 1)
-    left_handed_M = torch.cat((R_openGL, T_openGL), 1) # Cat along rows
-    left_handed_M = torch.cat((left_handed_M, column), 2) # Cat along columns
     return left_handed_M, R_openGL, T_openGL
 
 def split_opengl_hom_matrix(matrix):
@@ -139,6 +132,25 @@ def split_opengl_hom_matrix(matrix):
     t =  torch.squeeze(t, 1) # N, 3
     return r, t
 
+def cat_opengl_hom_matrix(matrix_R, matrix_T, device):
+    """
+    OpenGL/Pytorch3D format = [R 0,
+                               T 1]
+    Concatenates R and T formats into hom matrix.
+    :param r_matrix:
+    :param t_matrix:
+    :return: [N, 4, 4]
+    """
+    T_openGL = torch.transpose(matrix_T.clone().expand(1, -1, -1), 1, 0) # (N, 1, 3)
+    R_openGL = matrix_R.clone()
+
+    eye = torch.eye(4, dtype=torch.float32, device=device) # Use last column
+    _, column = torch.split(eye, [3, 1])
+    column = torch.transpose(column.expand(1, -1, -1).repeat(R_openGL.shape[0], 1, 1), 2, 1)
+    left_handed_M = torch.cat((R_openGL, T_openGL), 1) # Cat along rows
+    left_handed_M = torch.cat((left_handed_M, column), 2) # Cat along columns
+    return left_handed_M
+
 def split_opencv_hom_matrix(matrix):
     """
     OpenCV format = [R T,
@@ -150,6 +162,21 @@ def split_opencv_hom_matrix(matrix):
     r, t = torch.split(torch.split(matrix, [3, 1], 1)[0], [3, 1], 2)
     t =  torch.squeeze(t, 2) # N, 3
     return r, t
+
+def cat_opencv_hom_matrix(matrix_R, matrix_T, device):
+    """
+    OpenCV format = [R T,
+                     0 1]
+    Concatenates R and T formats into hom matrix.
+    :param r_matrix:
+    :param t_matrix:
+    :return: [N, 4, 4]
+    """
+    eye = torch.eye(4, dtype=torch.float32, device=device) # Use last column
+    _, column = torch.split(eye, [3, 1])
+    right_handed_M = torch.cat((matrix_R, torch.transpose(torch.transpose(matrix_T.expand(1, -1, -1), 2, 0), 1, 0)), 2)
+    right_handed_M = torch.cat((right_handed_M, column.expand(1, -1, -1).repeat(matrix_R.shape[0], 1, 1)), 1)
+    return right_handed_M
 
 def p2l_2_slicesampler(pose):
     """
@@ -283,7 +310,7 @@ def generate_transforms(device, batch, tensor_params=None):
     transform_rot_x = Transform3d(device=device).rotate_axis_angle(
                                                     torch.squeeze(rot_x_vals), "X")
     rot_transforms = Transform3d(device=device).compose(transform_rot_y, transform_rot_x, transform_rot_z)
-    return Transform3d(matrix=rot_transforms.get_matrix().double()), Transform3d(matrix=transform_t.get_matrix().double())
+    return Transform3d(matrix=rot_transforms.get_matrix()), Transform3d(matrix=transform_t.get_matrix())
 
 def perturb_orig_matrices(transform_l2c,
                           transform_p2c,
