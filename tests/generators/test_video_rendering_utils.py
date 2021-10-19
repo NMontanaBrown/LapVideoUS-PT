@@ -9,6 +9,7 @@ import pytest
 import numpy as np
 import torch
 from pytorch3d.transforms import Transform3d
+from pytorch3d.transforms import rotation_conversions as p3drc
 import lapvideous_pt.generators.video_generation.utils as vru
 from sksurgeryvtk.utils.matrix_utils import create_matrix_from_list 
 
@@ -579,3 +580,32 @@ def test_perturb_orig_matrices():
     perturbed_p2c = np.linalg.inv(transformed_c2l_numpy) @ transformed_p2l_numpy
     assert np.allclose(M_l2c_permuted_cv.numpy(), np.linalg.inv(transformed_c2l_numpy))
     assert np.allclose(M_p2c_permuted_cv.numpy(), perturbed_p2c)
+
+def test_quaternion_conversion_l2c():
+    """
+    Testing what happens with preds after converting
+    from quaternion to final matrix.
+    """
+    from scipy.spatial.transform import Rotation as R
+    device = torch.device("cpu")
+    # L2c
+    test_matrix_l2c = np.loadtxt("tests/data/spp_liver2camera.txt")
+    test_matrix_c2l = np.linalg.inv(test_matrix_l2c)
+    test_matrix_l2c = np.expand_dims(test_matrix_l2c, 0)
+    r = test_matrix_l2c[:, :3, :3]
+    t = test_matrix_l2c[:, :3, 3]
+    test_matrix_l2c_torch_r = torch.from_numpy(r)
+    test_matrix_l2c_torch_t = torch.from_numpy(t)
+    M_l2c, l2c_r, l2c_t = vru.opencv_to_opengl(test_matrix_l2c_torch_r, test_matrix_l2c_torch_t, device)
+    M_l2c_cv, l2c_r_cv, l2c_t_cv = vru.opengl_to_opencv(l2c_r, l2c_t, device)
+
+    # Convert to quaternions and back, to check same matrix is returned.
+    l2c_rq = p3drc.matrix_to_quaternion(l2c_r) # OpenGL
+    l2c_rq_cv = p3drc.matrix_to_quaternion(l2c_r_cv) # OpenCV
+    l2c_rqr_cv = p3drc.quaternion_to_matrix(l2c_rq_cv)
+    l2c_rqr_gl = p3drc.quaternion_to_matrix(l2c_rq)
+
+    # This should be internally consistent.
+    assert np.allclose(test_matrix_l2c[0, :3, :3], l2c_rqr_cv.numpy())
+    # This should be internally consistent.
+    assert np.allclose(l2c_r.numpy(), l2c_rqr_gl)
