@@ -647,3 +647,28 @@ def test_quaternion_conversion_l2c():
     assert np.allclose(test_matrix_l2c[0, :3, :3], l2c_rqr_cv.numpy())
     # This should be internally consistent.
     assert np.allclose(l2c_r.numpy(), l2c_rqr_gl)
+
+def test_quaternion_unique_solutions():
+    """
+    Test function that returns unique quaternions constrained
+    to the positive hemisphere.
+    """
+    # Generate a randoom set of quaternions
+    random_quaternions = p3drc.random_quaternions(5)
+    # Get the other solution by -q
+    inv_quaternions = -random_quaternions.clone()
+    rand_quat_rot = p3drc.quaternion_to_matrix(random_quaternions)
+    inv_quat_rot = p3drc.quaternion_to_matrix(inv_quaternions)
+    # Should be the same, as the rotation matrix has the same solution
+    # for both sets of quaternions
+    assert np.allclose(rand_quat_rot.numpy(), inv_quat_rot.numpy())
+
+    # use our constrain quaternion hemisphere function to convert all
+    # quats to a hemisphere
+    inv_quaternions_inv = vru.constrain_quat_hemisphere(random_quaternions)
+    random_quaternions_inv = vru.constrain_quat_hemisphere(inv_quaternions)
+    # Should give the same vectors
+    assert np.allclose(inv_quaternions_inv.numpy(), random_quaternions_inv.numpy())
+    # Should give the same rotation solution
+    assert np.allclose(p3drc.quaternion_to_matrix(inv_quaternions_inv).numpy(),
+                       p3drc.quaternion_to_matrix(random_quaternions_inv).numpy())
