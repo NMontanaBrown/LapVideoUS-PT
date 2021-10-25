@@ -44,6 +44,25 @@ def convert_points_to_stl(file):
     writer.SetFileName(outfile)
     writer.Write()
 
+def constrain_quat_hemisphere(quaternion):
+    """
+    Rotation matrices have two solutions in
+    quaternion notation q and -q. We can make the
+    solution unique by constraining the quaternions
+    to one of the hemispheres.
+    :param quaternion: torch.Tensor, (N, 4)
+    :return: quaternion_constrained, (N, 4)
+    """
+    # Constrain first element of quaternion to
+    # always be positive.
+    r, i, j, k = torch.split(quaternion, [1, 1, 1, 1], dim=1)
+    sign_r = torch.sign(r)
+    # Give sign of first element.
+    # Multiply all i, j, k by sign to get quaternions in same
+    # hemispheres.
+    quaternion_constrained = torch.mul(quaternion, sign_r)
+    return quaternion_constrained
+
 def opencv_to_opengl(matrix_R, matrix_T, device):
     """
     Converts [N, 3, 3], [B, 3] left-handed (A = Bx)
@@ -257,7 +276,8 @@ def generate_random_params_index(device, batch, index, start, stop):
     list_tensors = []
     for i in range(6):
         if i in index:
-            list_tensors.append((start[index.index(i)]-stop[index.index(i)])*torch.randn((batch, 1), device=device) + start[index.index(i)])
+            random_nums = torch.rand((batch, 1), device=device)
+            list_tensors.append((stop[index.index(i)]-start[index.index(i)])*random_nums + start[index.index(i)])
         else:
             list_tensors.append(torch.zeros((batch, 1), device=device))
     return torch.cat(list_tensors, dim=1)
@@ -302,14 +322,14 @@ def generate_transforms(device, batch, tensor_params=None):
         torch.split(tensor_params, [1,1,1,3], 1)
 
     # Compose matrices
-    transform_t = Transform3d(device=device).translate(t_xyz)
-    transform_rot_y = Transform3d(device=device).rotate_axis_angle(
+    transform_t = Transform3d(device=device, dtype=torch.float32).translate(t_xyz)
+    transform_rot_y = Transform3d(device=device, dtype=torch.float32).rotate_axis_angle(
                                                     torch.squeeze(rot_y_vals), "Y")
-    transform_rot_z = Transform3d(device=device).rotate_axis_angle(
+    transform_rot_z = Transform3d(device=device, dtype=torch.float32).rotate_axis_angle(
                                                     torch.squeeze(rot_z_vals), "Z")
-    transform_rot_x = Transform3d(device=device).rotate_axis_angle(
+    transform_rot_x = Transform3d(device=device, dtype=torch.float32).rotate_axis_angle(
                                                     torch.squeeze(rot_x_vals), "X")
-    rot_transforms = Transform3d(device=device).compose(transform_rot_y, transform_rot_x, transform_rot_z)
+    rot_transforms = Transform3d(device=device, dtype=torch.float32).compose(transform_rot_y, transform_rot_x, transform_rot_z)
     return Transform3d(matrix=rot_transforms.get_matrix()), Transform3d(matrix=transform_t.get_matrix())
 
 def perturb_orig_matrices(transform_l2c,

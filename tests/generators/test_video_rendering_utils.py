@@ -215,8 +215,20 @@ def test_gen_random_params_index():
     device = torch.device("cpu")
     generated_values = vru.generate_random_params_index(device, 4, [0, 3], [10, 10], [20,20])
     split_values = torch.split(generated_values, [1,1,1,1,1,1], 1)
-    # Check indices not at 0, 3 are zeross
-    assert np.allclose(split_values[1].numpy(), split_values[-1].numpy())
+    # Check values at 0, 3 are between 10 and 20
+    assert np.logical_and(np.where(split_values[0].numpy() <=20, 1, 0), np.where(split_values[0].numpy() >=10, 1, 0)).all()
+    assert np.logical_and(np.where(split_values[3].numpy() <=20, 1, 0), np.where(split_values[3].numpy() >=10, 1, 0)).all()
+
+def test_gen_random_params_index_2():
+    """
+    Test that we get random numbers generated
+    at appropriate indices.
+    """
+    device = torch.device("cpu")
+    generated_values = vru.generate_random_params_index(device, 4, [3], [(-50.0+(0*9))], [(-50.0+((1)*9))])
+    split_values = torch.split(generated_values, [1,1,1,1,1,1], 1)
+    # Check indices at 3 are between -50 and -41
+    assert np.logical_and(np.where(split_values[3].numpy() <=-41, 1, 0), np.where(split_values[3].numpy() >=-50, 1, 0)).all()
 
 def test_gen_ordered_params_index():
     """
