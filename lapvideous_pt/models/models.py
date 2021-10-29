@@ -51,10 +51,11 @@ class LapVideoUS(nn.Module):
         """
         super().__init__()
         # Setup CUDA device.
-        if torch.cuda.is_available():
-            print("Using CUDA Device: ", torch.device(device))
-            device = torch.device(device)
-            torch.cuda.set_device(device)
+        if not device=="cpu":
+            if torch.cuda.is_available():
+                print("Using CUDA Device: ", torch.device(device))
+                device = torch.device(device)
+                torch.cuda.set_device(device)
         else:
             device = torch.device("cpu")
 
@@ -105,12 +106,12 @@ class LapVideoUS(nn.Module):
         self.conv6_bn=nn.BatchNorm2d(48)
         self.conv7 = nn.Conv2d(in_channels=48, out_channels=48, kernel_size=5, stride=1, padding=2)
         self.conv7_bn=nn.BatchNorm2d(48)
-        self.pool3 = nn.MaxPool2d(2,2) # Hout/8
-        self.fc1 = nn.Linear(30000, 10000)
-        self.fc_rot_1  = nn.Linear(5000, 1000)
+        self.pool3 = nn.MaxPool2d(3,3)
+        self.fc1 = nn.Linear(int(48*(image_size[0]/12)*(image_size[1]/12)), 3000)
+        self.fc_rot_1  = nn.Linear(1500, 1000)
         self.fc_rot_2  = nn.Linear(1000, 100)
         self.fc_rot_3  = nn.Linear(100, 8)
-        self.fc_trans_1  = nn.Linear(5000, 1000)
+        self.fc_trans_1  = nn.Linear(1500, 1000)
         self.fc_trans_2  = nn.Linear(1000, 100)
         self.fc_trans_3  = nn.Linear(100, 6)
         print("Model built.")
@@ -147,7 +148,7 @@ class LapVideoUS(nn.Module):
         self.video_loader.load_meshes(mesh_dir, self.video_loader.config)
         np_intrinsics = np.loadtxt(intrinsics)
         self.video_loader.setup_renderer(np_intrinsics, image_size, output_size)
-        self.bounds = torch.from_numpy(np.array([500, 500, 500])).to(self.device)
+        self.bounds = torch.from_numpy(np.array([500.0, 500.0, 500.0], dtype=np.float32)).to(self.device)
 
     def pre_process_US_files(self, path_us_tensors, name_tensor):
         """
@@ -159,10 +160,10 @@ class LapVideoUS(nn.Module):
         :param name_tensor: str, name of simulation tensor to use.
         :return: void.
         """
-        volume = torch.from_numpy(np.load(os.path.join(path_us_tensors, name_tensor))).to(device=self.device)
-        origin = torch.from_numpy(np.load(os.path.join(path_us_tensors, name_tensor.replace(".npy", "_origin.npy")))).to(device=self.device)
-        pix_dim = torch.from_numpy(np.load(os.path.join(path_us_tensors, name_tensor.replace(".npy",'_pixdim.npy')))).to(device=self.device)
-        im_dim = torch.from_numpy(np.load(os.path.join(path_us_tensors, name_tensor.replace(".npy",'_imdim.npy')))).to(device=self.device)
+        volume = torch.from_numpy(np.load(os.path.join(path_us_tensors, name_tensor))).float()
+        origin = torch.from_numpy(np.load(os.path.join(path_us_tensors, name_tensor.replace(".npy", "_origin.npy")))).float().to(device=self.device)
+        pix_dim = torch.from_numpy(np.load(os.path.join(path_us_tensors, name_tensor.replace(".npy",'_pixdim.npy')))).float().to(device=self.device)
+        im_dim = torch.from_numpy(np.load(os.path.join(path_us_tensors, name_tensor.replace(".npy",'_imdim.npy')))).int().to(device=self.device)
         print("Im dim US: ", im_dim)
         us_dict = {"image_dim":im_dim,
                    "voxel_size":0.5,
@@ -188,14 +189,15 @@ class LapVideoUS(nn.Module):
         of video rendering objects once, and avoid
         re-calling it each rendering instance.
         :return: [liver_verts, liver_faces, liver_textures],
-                 [probe_verts, probe_faces, probe_textures]
+                 [probe_verts, probe_faces, probe_textures],
+                 us_volume
         """
         # Base rendering objects - Video
-        verts_liver = self.video_loader.meshes["liver"]["verts"].to(self.device) # (1, L, 3)
-        faces_liver = self.video_loader.meshes["liver"]["faces"].to(self.device)# (1, G)
+        verts_liver = self.video_loader.meshes["liver"]["verts"].float().to(self.device) # (1, L, 3)
+        faces_liver = self.video_loader.meshes["liver"]["faces"].float().to(self.device)# (1, G)
         textures_liver = self.video_loader.meshes["liver"]["textures"].to(self.device) # (1, L)
-        verts_probe = self.video_loader.meshes["probe"]["verts"].to(self.device) # (1, P, 3)
-        faces_probe = self.video_loader.meshes["probe"]["faces"].to(self.device) # (1, F)
+        verts_probe = self.video_loader.meshes["probe"]["verts"].float().to(self.device) # (1, P, 3)
+        faces_probe = self.video_loader.meshes["probe"]["faces"].float().to(self.device) # (1, F)
         textures_probe = self.video_loader.meshes["probe"]["textures"].to(self.device) # (1, P)
         batch_textures_liver = [textures_liver for i in range(self.batch)]
         batch_textures_probe = [textures_probe for i in range(self.batch)]
@@ -204,11 +206,21 @@ class LapVideoUS(nn.Module):
         batch_faces_probe = faces_probe.repeat(self.batch, 1, 1).to(self.device)
         verts_liver_batch = verts_liver.repeat(self.batch, 1, 1).to(self.device) # (N, P, 3)
         verts_probe_batch = verts_probe.repeat(self.batch, 1, 1).to(self.device) # (N, P, 3)
-        return [verts_liver_batch, batch_faces_liver, batch_textures_liver], \
-               [verts_probe_batch, batch_faces_probe, batch_textures_probe]
+        # Prep the US volume
+        us_volume = torch.transpose(
+                        torch.transpose(
+                            torch.transpose(
+                                torch.transpose(
+                                    torch.as_tensor(
+                                        self.us_dict["volume"], dtype=torch.float32, device=self.device
+                                        ).expand(1, -1, -1, -1, -1), 4, 1), 4, 2), 2, 3), 4, 3).repeat(self.batch, 1, 1, 1, 1)
+        return [[verts_liver_batch, batch_faces_liver, batch_textures_liver], \
+               [verts_probe_batch, batch_faces_probe, batch_textures_probe]], \
+               us_volume
 
     def render_data(self,
                     liver_data,
+                    us_volume,
                     transform_l2c,
                     transform_p2c):
         """
@@ -218,6 +230,7 @@ class LapVideoUS(nn.Module):
                             video rendering:
                             - [verts_liver_batch, batch_faces_liver, batch_textures_liver]
                             - [verts_probe_batch, batch_faces_probe, batch_textures_probe]
+        :param us_volume: torch.Tensor, (N, ...)
         :param transform_p2c: torch.Tensor, [N, 4, 4]
         :param transform_l2c: torch.Tensor, [N, 4, 4]
         :return: torch.Tensor for image and video data.
@@ -260,8 +273,8 @@ class LapVideoUS(nn.Module):
                                                                        liver_data[1][2],
                                                                        self.batch)
         # Normalise in openCV space
-        t_p2l_norm = vru.global_to_local_space(t_p2l_cv, self.bounds)
-        t_c2l_norm = vru.global_to_local_space(t_c2l_cv, self.bounds)
+        t_p2l_norm = vru.global_to_local_space(t_p2l, self.bounds)
+        t_c2l_norm = vru.global_to_local_space(t_c2l, self.bounds)
 
         #### RENDERING
         # Render image
@@ -273,14 +286,14 @@ class LapVideoUS(nn.Module):
                                 M_p2l_slicesampler,
                                 self.us_dict["voxel_size"],
                                 self.us_dict["origin"],
-                                self.us_dict["volume"],
+                                us_volume,
                                 self.batch,
                                 self.device)
         # Batch together, reshape US into correct output size.
         us = torch.transpose(torch.transpose(torch.squeeze(us, 2), 2, 1), 2, 1) # [N, ch, H, W]
         us_pad = F.pad(us, self.us_pad) # (N, Ch, Out_size[0], Out_size[1])
-        image_tensor = torch.cat([torch.transpose(torch.transpose(image, 3, 1), 3, 2), us_pad], 1) # Cat along channels
-        return image_tensor
+        image_tensor = torch.cat([torch.transpose(image, 3, 1), us_pad], 1) # Cat along channels
+        return image_tensor, [t_c2l_norm, t_p2l_norm]
 
     def post_process_predictions(self, rot_preds, trans_preds):
         """
@@ -311,7 +324,7 @@ class LapVideoUS(nn.Module):
         c2l_pytorch3d = Transform3d(matrix=c2l_openGL, device=self.device)
         return c2l_pytorch3d, p2l_pytorch3d
 
-    def forward(self, liver_data, image_data):
+    def forward(self, liver_data, us_volume, image_data):
         """
         Defines forward pass.
         Pass data through model.
@@ -321,39 +334,42 @@ class LapVideoUS(nn.Module):
                            video rendering:
                           - [verts_liver_batch, batch_faces_liver, batch_textures_liver]
                           - [verts_probe_batch, batch_faces_probe, batch_textures_probe]
+        :param us_volume: torch.Tensor, (N, W, H, D,Ch)
         :param data: torch.Tensor, (N, Ch, H, W),
                      image from GT rendering.
         :return: [loss_im, tensor_pred]
         """
         #### NETWORKS
-        out = F.relu(self.conv1(image_data))
-        out = F.relu(self.conv2(out))
+        out = F.leaky_relu(self.conv1(image_data))
+        out = F.leaky_relu(self.conv2(out))
         out = self.pool(out)
-        out = F.relu(self.conv4(out))
-        out = F.relu(self.conv5(out))
+        out = F.leaky_relu(self.conv4(out))
+        out = F.leaky_relu(self.conv5(out))
         out = self.pool2(out)
-        out = F.relu(self.conv6(out))
-        out = F.relu(self.conv7(out))
+        out = F.leaky_relu(self.conv6(out))
+        out = F.leaky_relu(self.conv7(out))
         out = self.pool3(out)
         out = torch.flatten(out, start_dim=1)
-        out = F.relu(self.fc1(out))
+        out = F.leaky_relu(self.fc1(out))
         # Split network results into two branches, one for rotation
         # and one for translation.
-        out_rot, out_trans = torch.split(out, [5000, 5000], dim=1)
-        out_rot = F.relu(self.fc_rot_1(out_rot))
-        out_rot = F.relu(self.fc_rot_2(out_rot))
-        out_rot = F.tanh(self.fc_rot_3(out_rot)) # B, 8
-        out_trans = F.relu(self.fc_trans_1(out_trans))
-        out_trans = F.relu(self.fc_trans_2(out_trans))
-        out_trans = F.tanh(self.fc_trans_3(out_trans)) # B, 6
+        out_rot, out_trans = torch.split(out, [1500, 1500], dim=1)
+        out_rot = F.leaky_relu(self.fc_rot_1(out_rot))
+        out_rot = F.leaky_relu(self.fc_rot_2(out_rot))
+        out_rot = self.fc_rot_3(out_rot) # B, 8
+
+        out_trans = F.leaky_relu(self.fc_trans_1(out_trans))
+        out_trans = F.leaky_relu(self.fc_trans_2(out_trans))
+        out_trans = self.fc_trans_3(out_trans) # B, 6
 
         #### POST PROCESS OUTPUTS
         # For translations we need a representation in bounded space
         c2l_pytorch3d, p2l_pytorch3d = self.post_process_predictions(out_rot, out_trans)
         transform_l2c_pred = c2l_pytorch3d.inverse()
         transform_p2c_pred = p2l_pytorch3d.compose(transform_l2c_pred)
-        tensor_pred = self.render_data(liver_data=liver_data,
-                                       transform_p2c=transform_p2c_pred.get_matrix(),
-                                       transform_l2c=transform_l2c_pred.get_matrix())
+        tensor_pred, _ = self.render_data(liver_data=liver_data,
+                                          us_volume=us_volume,
+                                          transform_p2c=transform_p2c_pred.get_matrix(),
+                                          transform_l2c=transform_l2c_pred.get_matrix())
         #### RETURN PRED IMAGE AND PRED TRANSFORMS
-        return tensor_pred, [c2l_pytorch3d, p2l_pytorch3d]
+        return tensor_pred, [c2l_pytorch3d, p2l_pytorch3d], out_trans

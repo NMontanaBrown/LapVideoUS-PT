@@ -87,8 +87,8 @@ class VideoLoader():
             verts, faces_idx, _ = load_obj(os.path.join(mesh_dir, config[object]["path"]))
             faces = faces_idx.verts_idx
             # For now just use RGB values with flat shading.]
-            colour = np.array(config[object]["colour"]) # list (3) of 0-255 values for colour.
-            verts_rgb = np.ones_like(verts) 
+            colour = np.array(config[object]["colour"], dtype=np.float32) # list (3) of 0-255 values for colour.
+            verts_rgb = np.ones_like(verts, dtype=np.float32)
             verts_rgb *= colour
             verts_rgb = torch.from_numpy(verts_rgb).expand(1, -1, -1) # (1, V, 3)
             textures = TexturesVertex(verts_features=verts_rgb.to(self.device))
