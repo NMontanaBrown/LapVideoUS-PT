@@ -235,6 +235,7 @@ def slice_volume(image_dim,
     voxel_locs_norm = normalise_voxel_locs(voxel_locs, shape_planes, volume.shape[0:3], device)
 
     voxel_locs_norm = torch.transpose(torch.transpose(voxel_locs_norm, 1, 3), 2, 3)
+    volume = torch.transpose(torch.transpose(torch.transpose(torch.transpose(torch.as_tensor(volume, dtype=torch.float32, device=device).expand(1, -1, -1, -1, -1), 4, 1), 4, 2), 2, 3), 4, 3)
 
-    out_im = sample(volume, voxel_locs_norm)
+    out_im = sample(volume.repeat(batch, 1, 1, 1, 1), voxel_locs_norm)
     return out_im

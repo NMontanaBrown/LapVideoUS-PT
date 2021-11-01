@@ -160,7 +160,7 @@ class LapVideoUS(nn.Module):
         :param name_tensor: str, name of simulation tensor to use.
         :return: void.
         """
-        volume = torch.from_numpy(np.load(os.path.join(path_us_tensors, name_tensor))).float()
+        volume = torch.from_numpy(np.load(os.path.join(path_us_tensors, name_tensor))).to(device=self.device)
         origin = torch.from_numpy(np.load(os.path.join(path_us_tensors, name_tensor.replace(".npy", "_origin.npy")))).float().to(device=self.device)
         pix_dim = torch.from_numpy(np.load(os.path.join(path_us_tensors, name_tensor.replace(".npy",'_pixdim.npy')))).float().to(device=self.device)
         im_dim = torch.from_numpy(np.load(os.path.join(path_us_tensors, name_tensor.replace(".npy",'_imdim.npy')))).int().to(device=self.device)
@@ -207,20 +207,11 @@ class LapVideoUS(nn.Module):
         verts_liver_batch = verts_liver.repeat(self.batch, 1, 1).to(self.device) # (N, P, 3)
         verts_probe_batch = verts_probe.repeat(self.batch, 1, 1).to(self.device) # (N, P, 3)
         # Prep the US volume
-        us_volume = torch.transpose(
-                        torch.transpose(
-                            torch.transpose(
-                                torch.transpose(
-                                    torch.as_tensor(
-                                        self.us_dict["volume"], dtype=torch.float32, device=self.device
-                                        ).expand(1, -1, -1, -1, -1), 4, 1), 4, 2), 2, 3), 4, 3).repeat(self.batch, 1, 1, 1, 1)
         return [[verts_liver_batch, batch_faces_liver, batch_textures_liver], \
-               [verts_probe_batch, batch_faces_probe, batch_textures_probe]], \
-               us_volume
+               [verts_probe_batch, batch_faces_probe, batch_textures_probe]]
 
     def render_data(self,
                     liver_data,
-                    us_volume,
                     transform_l2c,
                     transform_p2c):
         """
@@ -286,7 +277,7 @@ class LapVideoUS(nn.Module):
                                 M_p2l_slicesampler,
                                 self.us_dict["voxel_size"],
                                 self.us_dict["origin"],
-                                us_volume,
+                                self.us_dict["volume"],
                                 self.batch,
                                 self.device)
         # Batch together, reshape US into correct output size.
@@ -324,7 +315,7 @@ class LapVideoUS(nn.Module):
         c2l_pytorch3d = Transform3d(matrix=c2l_openGL, device=self.device)
         return c2l_pytorch3d, p2l_pytorch3d
 
-    def forward(self, liver_data, us_volume, image_data):
+    def forward(self, liver_data, image_data):
         """
         Defines forward pass.
         Pass data through model.
@@ -368,7 +359,6 @@ class LapVideoUS(nn.Module):
         transform_l2c_pred = c2l_pytorch3d.inverse()
         transform_p2c_pred = p2l_pytorch3d.compose(transform_l2c_pred)
         tensor_pred, _ = self.render_data(liver_data=liver_data,
-                                          us_volume=us_volume,
                                           transform_p2c=transform_p2c_pred.get_matrix(),
                                           transform_l2c=transform_l2c_pred.get_matrix())
         #### RETURN PRED IMAGE AND PRED TRANSFORMS
