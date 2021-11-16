@@ -17,7 +17,7 @@ from lapvideous_pt.models.models import LapVideoUS
 import lapvideous_pt.generators.video_generation.utils as vru
 import matplotlib.pyplot as plt
 
-# @pytest.mark.skip(reason="Requires local data, not shareable.")
+@pytest.mark.skip(reason="Requires local data, not shareable.")
 def test_post_process_predictions():
     """
     Checking that for a known set of parameters
@@ -87,19 +87,56 @@ def test_post_process_predictions():
     plt.xlabel("Video Render, B=1")
     plt.imshow(np.transpose(image_tensor_pred.numpy()[0, 0:4, :, :],  [1, 2, 0]))  # only plot the alpha channel of the RGBA image
     plt.grid(False)
-    plt.show()
+    plt.close()
 
     # This does not pass - some numerical error.
     # assert np.allclose(image_tensor, image_tensor_pred)
     # assert np.allclose(p2c_transform3d.get_matrix().numpy(), transform_p2c.numpy())
 
 @pytest.mark.skip(reason="Requires local data, not shareable.")
+def test_renders_w_CV_space_transforms():
+    """
+    Checking that rendering is accurate for CV space simulations.
+    """
+    model_lus_json = os.path.join(os.path.abspath("/home/nina/Data/LapVideoUS/H09/test_data/"), 'expt_config.json')
+    with open(model_lus_json) as f:
+        expt_config = json.load(f)
+
+    model = LapVideoUS(**expt_config)
+    video_data = model.prep_input_data_for_render()
+
+    # OpenGL rendering format.
+    transform_l2c = model.video_loader.l2c.expand(1, -1, -1) # (N, 4, 4)
+    transform_p2c = model.video_loader.p2c.expand(1, -1, -1) # (N, 4, 4)
+    r_c2l, t_c2l = vru.generate_transforms(model.device, 1, torch.from_numpy(np.array([[0,0,0,0,0,0]], dtype=np.float64)))
+    r_p2l, t_p2l = vru.generate_transforms(model.device, 1, torch.from_numpy(np.array([[0,0,0,0,0,0]], dtype=np.float64)))
+    transform_l2c_p, transform_p2c_p = vru.perturb_orig_matrices_in_CV_space(Transform3d(matrix=transform_l2c, device=model.device),
+                                                                             Transform3d(matrix=transform_p2c, device=model.device),
+                                                                             r_c2l, t_c2l, r_p2l, t_p2l, model.device)
+
+    # Render a first image tensor.
+    image_tensor, _ = model.render_data(video_data,
+                                        transform_l2c=transform_l2c_p.get_matrix(),
+                                        transform_p2c=transform_p2c_p.get_matrix())
+
+    plt.subplot(1, 2, 1)
+    plt.xlabel("US resliced, B=1")
+    plt.imshow(torch.transpose(image_tensor, 3, 1)[0, :, :, :4].cpu().numpy())
+    plt.grid(False)
+    plt.subplot(1, 2, 2)
+    plt.xlabel("Video Render, B=1")
+    plt.imshow(np.transpose(image_tensor.cpu().numpy(), [0, 3, 2, 1])[0, :, :, 4:])  # only plot the alpha channel of the RGBA image
+    plt.grid(False)
+    plt.savefig("./Test_models_CV_space_transforms.png")
+    plt.close()
+
+
 def test_post_process_predictions_perturbed():
     """
     Checking that for a known set of parameters
     we get the correct rendering.
     """
-    model_lus_json = os.path.join(os.path.abspath("./tests/data/test_data/"), 'expt_config.json')
+    model_lus_json = os.path.join(os.path.abspath("/home/nina/Data/LapVideoUS/H09/test_data/"), 'expt_config.json')
     with open(model_lus_json) as f:
         expt_config = json.load(f)
 
@@ -110,17 +147,17 @@ def test_post_process_predictions_perturbed():
     transform_l2c = model.video_loader.l2c.expand(1, -1, -1) # (N, 4, 4)
     transform_p2c = model.video_loader.p2c.expand(1, -1, -1) # (N, 4, 4)
     transform_p2l = Transform3d(matrix=transform_p2c, device=model.device).compose(Transform3d(matrix=transform_l2c, device=model.device).inverse()).get_matrix()
-    r_c2l, t_c2l = vru.generate_transforms(model.device, 1, torch.from_numpy(np.array([[10,10,10,10,10,10]], dtype=np.float64)))
-    r_p2l, t_p2l = vru.generate_transforms(model.device, 1, torch.from_numpy(np.array([[10,10,10,10,10,10]], dtype=np.float64)))
+    r_c2l, t_c2l = vru.generate_transforms(model.device, 1, torch.from_numpy(np.array([[0,0,0,0,0,0]], dtype=np.float64)))
+    r_p2l, t_p2l = vru.generate_transforms(model.device, 1, torch.from_numpy(np.array([[0,0,0,0,0,0]], dtype=np.float64)))
     transform_l2c_p, transform_p2c_p = vru.perturb_orig_matrices(Transform3d(matrix=transform_l2c, device=model.device),
                                                                  Transform3d(matrix=transform_p2c, device=model.device),
                                                                  r_c2l, t_c2l, r_p2l, t_p2l)
     transform_p2l = transform_p2c_p.compose(transform_l2c_p.inverse()).get_matrix()
     # Render a first image tensor.
-    image_tensor = model.render_data(video_data,
+    image_tensor, _ = model.render_data(video_data,
                                  transform_l2c=transform_l2c_p.get_matrix(),
                                  transform_p2c=transform_p2c_p.get_matrix())
-    ### Get original r and t matrices.
+    # ### Get original r and t matrices.
     p2l_r, p2l_t = vru.split_opengl_hom_matrix(transform_p2l)
     c2l_r, c2l_t = vru.split_opengl_hom_matrix(transform_l2c_p.inverse().get_matrix())
     ### Convert to quaternions and normalised t space.
@@ -139,46 +176,39 @@ def test_post_process_predictions_perturbed():
     
     p2c_transform3d = p2l_pytorch3d.compose(c2l_pytorch3d.inverse())
 
-    pred_c2l = c2l_pytorch3d.get_matrix().numpy()
-    gt_c2l = transform_l2c_p.inverse().get_matrix().numpy()
+    pred_c2l = c2l_pytorch3d.get_matrix().cpu().numpy()
+    gt_c2l = transform_l2c_p.inverse().get_matrix().cpu().numpy()
     print("\n Predicted c2l: \n", pred_c2l)
     print("\n GT c2l: \n", gt_c2l)
     assert np.allclose(gt_c2l, pred_c2l)
 
-    pred_p2c = p2c_transform3d.get_matrix().numpy()
-    gt_p2c =  transform_p2c_p.get_matrix().numpy()
+    pred_p2c = p2c_transform3d.get_matrix().cpu().numpy()
+    gt_p2c =  transform_p2c_p.get_matrix().cpu().numpy()
     print("\n Predicted p2c: \n", pred_p2c)
     print("\n GT P2c: \n", gt_p2c)
     assert np.allclose(pred_p2c, gt_p2c)
 
-    pred_p2l =  p2l_pytorch3d.get_matrix().numpy()
-    gt_p2l =  transform_p2l.numpy()
+    pred_p2l =  p2l_pytorch3d.get_matrix().cpu().numpy()
+    gt_p2l =  transform_p2l.cpu().numpy()
     print("\n Predicted p2l: \n",pred_p2l)
     print("\n GT P2l: \n", gt_p2l)
     assert np.allclose(gt_p2l, pred_p2l)
 
-    image_tensor_pred = model.render_data(video_data,
+    image_tensor_pred, _ = model.render_data(video_data,
                                           transform_l2c=c2l_pytorch3d.inverse().get_matrix(),
                                           transform_p2c=p2c_transform3d.get_matrix())
-    print("\n Average DIFF Images: \n", np.mean((image_tensor - image_tensor_pred).numpy()))
+    print("\n Average DIFF Images: \n", np.mean((image_tensor - image_tensor_pred).cpu().numpy()))
 
-    plt.subplot(1, 4, 1)
+    plt.subplot(1, 2, 1)
     plt.xlabel("US resliced, B=1")
-    plt.imshow(np.transpose(image_tensor.numpy()[0, 4:, :, :], [1, 2, 0]))
+    plt.imshow(torch.transpose(image_tensor, 3, 1)[0, :, :, :4].cpu().numpy())
     plt.grid(False)
-    plt.subplot(1, 4, 2)
+    plt.subplot(1, 2, 2)
     plt.xlabel("Video Render, B=1")
-    plt.imshow(np.transpose(image_tensor.numpy()[0, 0:4, :, :],  [1, 2, 0]))  # only plot the alpha channel of the RGBA image
+    plt.imshow(np.transpose(image_tensor.cpu().numpy(), [0, 3, 2, 1])[0, :, :, 4:])  # only plot the alpha channel of the RGBA image
     plt.grid(False)
-    plt.subplot(1, 4, 3)
-    plt.xlabel("US resliced, B=1")
-    plt.imshow(np.transpose(image_tensor_pred.numpy()[0, 4:, :, :], [1, 2, 0]))
-    plt.grid(False)
-    plt.subplot(1, 4, 4)
-    plt.xlabel("Video Render, B=1")
-    plt.imshow(np.transpose(image_tensor_pred.numpy()[0, 0:4, :, :],  [1, 2, 0]))  # only plot the alpha channel of the RGBA image
-    plt.grid(False)
-    plt.show()
+    plt.savefig("./Test_models_GL_space_transforms.png")
+    plt.close()
 
     # This does not pass - some numerical error.
     # assert np.allclose(image_tensor, image_tensor_pred)
@@ -231,24 +261,3 @@ def test_post_process_predictions_from_quaternions():
     print("P2C gt: \n", transform_p2c.numpy())
     print("P2l pred: \n", p2l_pytorch3d.get_matrix().numpy())
     print("P2l gt: \n", transform_p2l.numpy())
-
-    plt.subplot(1, 4, 1)
-    plt.xlabel("US resliced, B=1")
-    plt.imshow(np.transpose(image_tensor.numpy()[0, 4:, :, :], [1, 2, 0]))
-    plt.grid(False)
-    plt.subplot(1, 4, 2)
-    plt.xlabel("Video Render, B=1")
-    plt.imshow(np.transpose(image_tensor.numpy()[0, 0:4, :, :],  [1, 2, 0]))  # only plot the alpha channel of the RGBA image
-    plt.grid(False)
-    plt.subplot(1, 4, 3)
-    plt.xlabel("US resliced, B=1")
-    plt.imshow(np.transpose(image_tensor_pred.numpy()[0, 4:, :, :], [1, 2, 0]))
-    plt.grid(False)
-    plt.subplot(1, 4, 4)
-    plt.xlabel("Video Render, B=1")
-    plt.imshow(np.transpose(image_tensor_pred.numpy()[0, 0:4, :, :],  [1, 2, 0]))  # only plot the alpha channel of the RGBA image
-    plt.grid(False)
-    plt.show()
-
-    # This does not pass - some numerical error.
-    # assert np.allclose(image_tensor, image_tensor_pred)

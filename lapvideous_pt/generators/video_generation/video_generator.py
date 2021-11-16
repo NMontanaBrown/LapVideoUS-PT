@@ -16,7 +16,7 @@ from pytorch3d.renderer import (
     FoVPerspectiveCameras, PerspectiveCameras,  
     RasterizationSettings, MeshRenderer, MeshRasterizer, BlendParams,
     SoftSilhouetteShader, HardPhongShader, PointLights, TexturesVertex,
-    camera_conversions
+    # camera_conversions
 )
 
 
@@ -112,41 +112,49 @@ class VideoLoader():
                             output size.
         :return: void
         """
-        # Use one set of intrinsics only
-        K = torch.from_numpy(np.expand_dims(intrinsics, 0).astype(np.float32)).to(self.device) # 1, 3, 3
-        WH = torch.from_numpy(np.expand_dims(np.array(image_size), 0).astype(np.float32)).to(self.device)
-
-        # Initialize a perspective camera - we do this using a conversion from OpenCV.
-        # The initial location of the camera doesn't matter as we can set this individually
-        # each time later. So just set identity matrix.
-        eye =  torch.from_numpy(np.expand_dims(np.eye(3), 0).astype(np.float32)).to(self.device)
-        t_eye =  torch.from_numpy(np.expand_dims(np.zeros(3), 0).astype(np.float32)).to(self.device)
-        cameras = camera_conversions._cameras_from_opencv_projection(eye, t_eye, K, WH)
-
         # Generate params and settings for Phong renderer.
         # Hard code faces per bin - otherwise we can get patches
         # missing from the pictures rendered. See issue #1 for details.
-        blend_params = BlendParams(sigma=1e-4, gamma=1e-4)
+        self.cameras = PerspectiveCameras(
+            focal_length=((1892.33, 944.889),),
+            principal_point=((1105.87, 752.693),),
+            image_size=((1920.0, 1080.0),),
+            device=self.device)
+
+        # Create a phong mesh renderer.
+        # Set the background colour black.
+        blend_params = BlendParams(background_color=(0, 0, 0))
+
         raster_settings = RasterizationSettings(
-            image_size=output_size, 
-            blur_radius=np.log(1. / 1e-4 - 1.) * blend_params.sigma, 
+            image_size=200,
+            blur_radius=0.0,
             faces_per_pixel=1,
-            max_faces_per_bin=1000000
+            max_faces_per_bin=100000,
+            cull_backfaces=True
         )
-        rasterizer = MeshRasterizer(
-                cameras=cameras, 
-                raster_settings=raster_settings)
 
-        renderer_camera_location = rasterizer.cameras.get_camera_center()
+        # Light is at the camera.
+        self.lights_phong = \
+            PointLights(device=self.device,
+                        # diffuse_color=((0, 0, 0),),
+                        # specular_color=((0, 0, 0),),
+                        # ambient_color=((1.0, 1.0, 1.0),),))
+            )
 
-        # We can add a point light in front of the object. 
-        lights = PointLights(device=self.device, location=(renderer_camera_location))
-        phong_renderer = MeshRenderer(
+        self.mesh_rasteriser = MeshRasterizer(
+            cameras=self.cameras,
+            raster_settings=raster_settings)
+
+        self.phong_renderer = MeshRenderer(
             rasterizer=MeshRasterizer(
-                cameras=cameras, 
+                cameras=self.cameras,
                 raster_settings=raster_settings
             ),
-            shader=HardPhongShader(device=self.device, cameras=cameras, lights=lights)
+            shader=HardPhongShader(device=self.device,
+                                   cameras=self.cameras,
+                                   lights=self.lights_phong,
+                                   blend_params=blend_params)
         )
-        self.renderer = phong_renderer
+
+        self.renderer = self.phong_renderer
         self.renderer.to(self.device)
