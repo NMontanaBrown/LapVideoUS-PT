@@ -5,9 +5,8 @@
 scipy
 scikit-image
 wandb
+torch==1.6.0
+torchvision==0.7.0
 pytorch3d
-torch===1.7.0
-torchvision===0.8.1
-torchaudio===0.7.0
 imageio
 vtk
