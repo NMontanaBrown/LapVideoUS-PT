@@ -11,8 +11,10 @@ import torch
 from torch.functional import split
 from pytorch3d.transforms import Transform3d
 from pytorch3d.transforms import rotation_conversions as p3drc
+from pytorch3d.transforms import so3 as p3dso3
+import sksurgerycore.transforms.matrix as cmu
 import lapvideous_pt.generators.video_generation.utils as vru
-from sksurgeryvtk.utils.matrix_utils import create_matrix_from_list 
+from sksurgeryvtk.utils.matrix_utils import create_matrix_from_list
 
 def test_opencv_opengl_opencv():
     """
@@ -631,6 +633,99 @@ def test_perturb_orig_matrices():
     assert np.allclose(M_l2c_permuted_cv.numpy(), np.linalg.inv(transformed_c2l_numpy))
     assert np.allclose(M_p2c_permuted_cv.numpy(), perturbed_p2c)
 
+def test_perturb_orig_matrices_l2c():
+    """
+    Test that perturbing matrices in l2c gives the same matrix
+    in opencv as Smartliver format.
+    """
+    device = torch.device("cpu")
+    # Generate transform3d objects
+    r_c2l, t_c2l = vru.generate_transforms(device, 1, torch.from_numpy(np.array([[10.0,10.0,10.0,10.0,10.0,10.0]], dtype=np.float32)))
+    r_p2l, t_p2l = vru.generate_transforms(device, 1, torch.from_numpy(np.array([[10.0,10.0,10.0,10.0,10.0,10.0]], dtype=np.float32)))
+    # Prep the test matrices
+    test_matrix_p2c = np.loadtxt("tests/data/spp_probe2camera.txt")
+    test_matrix_l2c = np.loadtxt("tests/data/spp_liver2camera.txt")
+    test_matrix_l2c = np.expand_dims(test_matrix_l2c, 0)
+    test_matrix_p2c = np.expand_dims(test_matrix_p2c, 0)
+    r = test_matrix_l2c[:, :3, :3]
+    t = test_matrix_l2c[:, :3, 3]
+    test_matrix_l2c_torch_r = torch.from_numpy(r).float()
+    test_matrix_l2c_torch_t = torch.from_numpy(t).float()
+    M_l2c, r_l2c_gl, t_l2c_gl = vru.opencv_to_opengl(test_matrix_l2c_torch_r, test_matrix_l2c_torch_t, device)
+
+    r = test_matrix_p2c[:, :3, :3]
+    t = test_matrix_p2c[:, :3, 3]
+    test_matrix_p2c_torch_r = torch.from_numpy(r).float()
+    test_matrix_p2c_torch_t = torch.from_numpy(t).float()
+    M_p2c, r_p2c_gl, t_p2c_gl = vru.opencv_to_opengl(test_matrix_p2c_torch_r, test_matrix_p2c_torch_t, device)
+    # Create base GL p2c and l2c objects
+    p2c_transform3d_gl = Transform3d(matrix=M_p2c.float(), device=device) # GL
+    l2c_transform3d_gl = Transform3d(matrix=M_l2c.float(), device=device) # GL
+
+    # Perturb matrices in CV space
+    transform_l2c_perturbed, transform_p2c_perturbed = vru.perturb_orig_matrices_in_CV_space(l2c_transform3d_gl,
+                                                                                            p2c_transform3d_gl,
+                                                                                            r_c2l,
+                                                                                            t_c2l,
+                                                                                            r_p2l,
+                                                                                            t_p2l,
+                                                                                            device)
+    
+    # Perturb l2c according to smartliver conventions
+    translation_tx = np.eye(4)
+    translation_tx[0][3] = 10
+    translation_tx[1][3] = 10
+    translation_tx[2][3] = 10
+    rmat = cmu.construct_rotm_from_euler(10, 10, 10, "zxy", False)
+    dummy_tvec = np.zeros((3, 1))
+    rotation_tx = cmu.construct_rigid_transformation(rmat, dummy_tvec)
+    full_tx = translation_tx @ np.loadtxt("tests/data/spp_liver2camera.txt") @ rotation_tx
+    l2c_perturbed_cv =  torch.from_numpy(translation_tx).float() @ torch.from_numpy(test_matrix_l2c).float() @ torch.from_numpy(rotation_tx).float()
+    r_perturbed, t_perturbed = vru.split_opencv_hom_matrix(l2c_perturbed_cv)
+    # Convert smartliver transform into pytorch frame of reference
+    M_l2c_from_gl, _, _ = vru.opencv_to_opengl(r_perturbed, t_perturbed, device)
+
+    # Comparing
+    print("Smartliver: \n", full_tx)
+    print("Pytorch3d CV:  \n", l2c_perturbed_cv.numpy())
+    print("Pytorch3d GL:  \n", M_l2c_from_gl.numpy())
+    print("Pytorch3d GL FUNC:  \n", transform_l2c_perturbed.get_matrix().numpy())
+
+    assert np.allclose(full_tx, l2c_perturbed_cv.numpy())
+    assert np.allclose(M_l2c_from_gl, transform_l2c_perturbed.get_matrix().numpy())
+
+def test_liver_image_reshaping():
+    """
+    
+    """
+    import matplotlib.pyplot as plt
+    from skimage import color
+    from skimage import io
+    from skimage.transform import resize
+
+    image = color.rgb2gray(io.imread("./tests/data/liver_image.png"))
+
+    image_resized = resize(image, (1080, 1920),
+                        anti_aliasing=True)
+
+    image_downscale = resize(image_resized, (200, 200),
+                        anti_aliasing=True)
+
+    _, axes = plt.subplots(nrows=3, ncols=1)
+
+    ax = axes.ravel()
+
+    ax[0].imshow(image, cmap='gray')
+    ax[0].set_title("Original image")
+
+    ax[1].imshow(image_resized, cmap='gray')
+    ax[1].set_title("Rescaled image")
+    ax[2].imshow(image_downscale, cmap='gray')
+    ax[2].set_title("Rescaled image and downscale")
+
+    plt.tight_layout()
+    plt.show()
+
 def test_quaternion_conversion_l2c():
     """
     Testing what happens with preds after converting
@@ -684,3 +779,34 @@ def test_quaternion_unique_solutions():
     # Should give the same rotation solution
     assert np.allclose(p3drc.quaternion_to_matrix(inv_quaternions_inv).numpy(),
                        p3drc.quaternion_to_matrix(random_quaternions_inv).numpy())
+
+def test_bounds_pytorch3d_rot_matrix():
+    """
+    Testing geodesic distance bounds for nans.
+    """
+    device = torch.device("cpu")
+    # L2c - turn into matrix
+    test_matrix_l2c = np.loadtxt("tests/data/spp_liver2camera.txt")
+    # test_matrix_c2l = np.linalg.inv(test_matrix_l2c)
+    test_matrix_l2c = np.expand_dims(test_matrix_l2c, 0)
+    r = test_matrix_l2c[:, :3, :3]
+    t = test_matrix_l2c[:, :3, 3]
+    test_matrix_l2c_torch_r = torch.from_numpy(r)
+    test_matrix_l2c_torch_t = torch.from_numpy(t)
+    M_l2c, l2c_r, l2c_t = vru.opencv_to_opengl(test_matrix_l2c_torch_r, test_matrix_l2c_torch_t, device)
+
+    # Simulating numerical error
+    r_perturb = test_matrix_l2c[:, :3, :3]+1e-4
+    r_perturb_torch = torch.from_numpy(r_perturb)
+    M_l2c_perturb, l2c_r_perturb, l2c_t_perturb = vru.opencv_to_opengl(r_perturb_torch, test_matrix_l2c_torch_t, device)
+    list_tol = [1e-3, 1e-4, 1e-5, 1e-6, 1e-7, 1e-8, 1e-9, 1e-10, 1e-11]
+    print("ACos")
+    for item in list_tol:
+        print(p3dso3.so3_relative_angle(l2c_r, l2c_r_perturb, cos_angle=False, cos_bound=item, eps=1e-3,))
+    print("Cos")
+    for item in list_tol:
+        # Cos is between -1 and 1. So, minimize (1-so3 relative angle)
+        print(p3dso3.so3_relative_angle(l2c_r, l2c_r_perturb, cos_angle=True, cos_bound=item, eps=1e-3,))
+    random_rots = p3drc.random_rotations(4)
+    result = (torch.ones(4) - p3dso3.so3_relative_angle(random_rots, random_rots, cos_angle=True)).sum() / 4.0
+    assert torch.allclose(result, torch.zeros(1),atol=1e-06)

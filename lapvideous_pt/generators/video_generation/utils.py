@@ -63,6 +63,46 @@ def constrain_quat_hemisphere(quaternion):
     quaternion_constrained = torch.mul(quaternion, sign_r)
     return quaternion_constrained
 
+def batch_p2l_2_slicesampler(poses):
+    """
+    Function to convert a batch of p2l poses into slicesampler representation,
+    which requires that poses be stacked horizontally, as well as
+    transformed into the slicesampler frame of reference.
+
+    :param poses: np.array, (N, 4, 4) of homogenous transformations
+                 representing p2l output of SmartLiver surface_probe_app.
+    :return: new_poses, np.array, (4, 4*N)
+    """
+    new_poses = []
+    for i in range(poses.shape[0]):
+        new_poses.append(p2l_2_slicesampler_numpy(poses[i, :, :]))
+    # convert from (N, 4, 4) to (4, N*4), by hstacking.
+    stacked_poses = np.hstack(new_poses)
+    return stacked_poses
+
+def p2l_2_slicesampler_numpy(pose):
+    """
+    Function to convert p2l output into slicesampler frame of reference.
+
+    :param pose: np.array, (4,4) homogenous transformation
+                    representing p2l output of SmartLiver surface_probe_app.
+    :return: new_pose, np.array, (4,4) homogenous transformation
+                of US plane characterization for slicesampler databases.
+    """
+    new_pose = np.zeros((4,4))
+    # Generate new frame of reference
+    # x_slicesampler -> -y_p2l, y_slicesampler -> z_p2l,
+    # z_slicesampler = the cross of x_slicesampler and y_slicesampler
+    x_new = -pose[:3, 1]
+    y_new = pose[:3, 2]
+    z_new = np.cross(x_new, y_new)
+
+    new_pose[:3, 0] = x_new
+    new_pose[:3, 1] = y_new
+    new_pose[:3, 2] = z_new
+    new_pose[:, 3] = pose[:, 3] # translation is the same.
+    return new_pose
+
 def opencv_to_opengl(matrix_R, matrix_T, device):
     """
     Converts [N, 3, 3], [B, 3] left-handed (A = Bx)
@@ -249,7 +289,7 @@ def global_to_local_space(pose_t, bounds):
     :param bounds: torch.Tensor, (3)
     :return: torch.Tensor, (N, 3)
     """
-    return torch.divide(pose_t, bounds)
+    return torch.div(pose_t, bounds)
 
 def local_to_global_space(pose_t, bounds):
     """
@@ -297,8 +337,8 @@ def generate_ordered_params_index(device, batch, index, start, stop):
     list_tensors = []
     for i in range(6):
         if i in index:
-            list_tensors.append(torch.transpose(torch.linspace(start=start[i],
-                                                end=stop[i],
+            list_tensors.append(torch.transpose(torch.linspace(start=start[index.index(i)],
+                                                end=stop[index.index(i)],
                                                 steps=batch,
                                                 device=device).expand(1, -1),
                                                 1, 0))
@@ -353,4 +393,54 @@ def perturb_orig_matrices(transform_l2c,
     perturbed_p2l = p2l.compose(perturbations_p2l_r, perturbations_p2l_t)
     # p2c = (l2c) @ (p2l) [Vertices] in OpenCV
     transform_p2c_perturbed = perturbed_p2l.compose(transform_l2c_perturbed)
+    return transform_l2c_perturbed, transform_p2c_perturbed
+
+def perturb_orig_matrices_in_CV_space(transform_l2c,
+                                      transform_p2c,
+                                      perturbations_l2c_r,
+                                      perturbations_l2c_t,
+                                      perturbations_p2l_r,
+                                      perturbations_p2l_t,
+                                      device):
+    """
+    To use CV conventions, we convert l2c objects in GL->CV space,
+    apply transformations in that space, and convert back to GL space.
+
+    :param transform_l2c: Transform3d object
+    :param transform_p2c: Transform3d object
+    :param perturbations_l2c_r: Transform3d object
+    :param perturbations_l2c_t: Transform3d object
+    :param perturbations_p2l_r: Transform3d object
+    :param perturbations_p2l_t: Transform3d object
+    :return: [transform_l2c_perturbed, transform_p2c_perturbed]
+    """
+    transform_l2c_m = transform_l2c.get_matrix()
+    transform_p2l_m = transform_p2c.compose(transform_l2c.inverse()).get_matrix()
+
+    # Convert into CV space
+    p2l_r_gl, p2l_t_gl = split_opengl_hom_matrix(transform_p2l_m)
+    l2c_r_gl, l2c_t_gl = split_opengl_hom_matrix(transform_l2c_m)
+    l2c_pert_r_r, l2c_pert_r_t = split_opengl_hom_matrix(perturbations_l2c_r.get_matrix())
+    l2c_pert_t_r, l2c_pert_t_t = split_opengl_hom_matrix(perturbations_l2c_t.get_matrix())
+    p2l_pert_r_r, p2l_pert_r_t = split_opengl_hom_matrix(perturbations_p2l_r.get_matrix())
+    p2l_pert_t_r, p2l_pert_t_t = split_opengl_hom_matrix(perturbations_p2l_t.get_matrix())
+
+    p2l_cv, _, _ = opengl_to_opencv_p2l(p2l_r_gl, p2l_t_gl, device)
+    l2c_cv, _, _ = opengl_to_opencv(l2c_r_gl, l2c_t_gl, device)
+    l2c_cv_r, _, _ = opengl_to_opencv_p2l(l2c_pert_r_r, l2c_pert_r_t, device)
+    l2c_cv_t, _, _ = opengl_to_opencv_p2l(l2c_pert_t_r, l2c_pert_t_t, device)
+    p2l_cv_r, _, _ = opengl_to_opencv_p2l(p2l_pert_r_r, p2l_pert_r_t, device)
+    p2l_cv_t, _, _ = opengl_to_opencv_p2l(p2l_pert_t_r, p2l_pert_t_t, device)
+
+    # Transform
+    l2c_cv_pert = l2c_cv_t @ l2c_cv @ l2c_cv_r
+    p2l_cv_pert = p2l_cv_t @ p2l_cv @ p2l_cv_r
+
+    # Convert into GL space
+    l2c_cv_r, l2c_cv_t = split_opencv_hom_matrix(l2c_cv_pert)
+    p2l_cv_r, p2l_cv_t = split_opencv_hom_matrix(p2l_cv_pert)
+    transform_l2c_perturbed, _, _ = opencv_to_opengl(l2c_cv_r, l2c_cv_t, device)
+    transform_p2l_perturbed, _, _ = opencv_to_opengl_p2l(p2l_cv_r, p2l_cv_t, device)
+    transform_l2c_perturbed = Transform3d(matrix=transform_l2c_perturbed)
+    transform_p2c_perturbed = Transform3d(matrix=transform_p2l_perturbed).compose(transform_l2c_perturbed)
     return transform_l2c_perturbed, transform_p2c_perturbed
