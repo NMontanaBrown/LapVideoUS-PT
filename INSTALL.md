@@ -1,9 +1,8 @@
 # Install
 
-This package relies on PyTorch=1.7.1, and [PyTorch3d](https://github.com/facebookresearch/pytorch3d) as it's main dependencies.
+This package relies on PyTorch=1.6.0, and [PyTorch3d](https://github.com/facebookresearch/pytorch3d) (0.3.0) as it's main dependencies. Pytorch3d 0.3.0 is only supported on Linux, therefore we only support this package for Linux.
 
 ## Pytorch Simulation Code
-
 
 ### Conda
 
@@ -12,11 +11,7 @@ Using Conda:
 `bash
 conda create -n pytorch3d python=3.8
 conda activate pytorch3d
-conda install -c pytorch pytorch=1.7.1 torchvision cudatoolkit=10.2
-conda install -c fvcore -c iopath -c conda-forge fvcore iopath
-conda install -c bottler nvidiacub
-conda install pytorch3d -c pytorch3d
-pip install -r requirements.txt
+pip install -r requirements-base.txt
 `
 
 ### Venv
@@ -25,17 +20,9 @@ pip install -r requirements.txt
 `bash
 source /share/apps/source_files/python/python-3.8.5.source # You can change which python
 python3 -m venv —system-site-packages LapVideoUS  # Gives access to site packages
-source ~/venvs/LapVideoUS-SUSI/bin/activate
+source ~/venvs/LapVideoUS/bin/activate
 pip install -r requirements.txt --user
 pip install --user -e ./ # Install repository
-`
-
-Using venv, the second to last step installing nvidiacub wouldn't work, so download and export CUB path locally:
-
-`bash
-curl -LO https://github.com/NVIDIA/cub/archive/1.10.0.tar.gz
-tar xzf 1.10.0.tar.gz
-export CUB_HOME=$PWD/cub-1.10.0
 `
 
 ## Legacy SliceSampler dependencies
