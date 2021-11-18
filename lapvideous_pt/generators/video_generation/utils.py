@@ -299,7 +299,7 @@ def local_to_global_space(pose_t, bounds):
     :param bounds: torch.Tensor, (3)
     :return: torch.Tensor, (N, 3)
     """
-    return torch.multiply(pose_t, bounds)
+    return torch.mul(pose_t, bounds)
 
 def generate_random_params_index(device, batch, index, start, stop):
     """
