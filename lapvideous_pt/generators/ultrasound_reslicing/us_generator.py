@@ -111,7 +111,7 @@ def generate_cartesian_grid(im_x_size,
               shape_coords, list [B, Y, X, 1, 3]]
     """
     # Define cartesian grids
-    x_grid = im_x_res*torch.range(start=-im_x_size/2, end=im_x_size/2-1, step=1, dtype=torch.float32, device=device)
+    x_grid = im_x_res*torch.range(start=-torch.true_divide(im_x_size, 2), end=torch.true_divide(im_x_size, 2)-1, step=1, dtype=torch.float32, device=device)
     y_grid = im_y_res*torch.range(start=0, end=im_y_size-1, step=1, dtype=torch.float32, device=device)
     x_values, y_values = torch.meshgrid(y_grid, x_grid)
     zeros = torch.zeros((im_y_size, im_x_size, 1), dtype=torch.float32, device=device)
@@ -171,7 +171,7 @@ def generate_volume_coordinates(voxel_res,
     # Calculate voxel indices of plane coordinates
     # Origin volume is coordinate of [0, 0, 0] voxel of volume
     # Therefore, voxel index is = (coordinate - origin) / resolution
-    voxel_locs = torch.divide(torch.subtract(xyz_planes, batch_origin_volume),
+    voxel_locs = torch.div((xyz_planes - batch_origin_volume),
                            batch_voxel_res)
 
     return voxel_locs # [B, M, N, 1, 3]
@@ -188,7 +188,7 @@ def normalise_voxel_locs(voxel_locs, shape_planes, grid_size, device):
     grid_size_repeat = torch.as_tensor(grid_size, dtype=torch.float32, device=device).repeat(
                                        shape_planes[0], shape_planes[1], shape_planes[2], 1, 1)
     grid_size_half = grid_size_repeat /2
-    voxel_locs_norm = torch.divide(torch.subtract(voxel_locs, grid_size_half), grid_size_half) # [3]
+    voxel_locs_norm = torch.true_divide((voxel_locs - grid_size_half), grid_size_half) # [3]
 
     return voxel_locs_norm # [B, M, N, 1, 3]
 

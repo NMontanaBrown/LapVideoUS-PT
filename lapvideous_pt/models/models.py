@@ -107,7 +107,7 @@ class LapVideoUS(nn.Module):
         self.conv7 = nn.Conv2d(in_channels=48, out_channels=48, kernel_size=5, stride=1, padding=2)
         self.conv7_bn=nn.BatchNorm2d(48)
         self.pool3 = nn.MaxPool2d(3,3)
-        self.fc1 = nn.Linear(int(48*(image_size[0]/12)*(image_size[1]/12)), 3000)
+        self.fc1 = nn.Linear(12288, 3000)
         self.fc_rot_1  = nn.Linear(1500, 1000)
         self.fc_rot_2  = nn.Linear(1000, 100)
         self.fc_rot_3  = nn.Linear(100, 8)

@@ -111,7 +111,7 @@ class USTensorSlice():
         _, binary_map_nc, _ =\
         seg_volume.simulate_image(poses=pose, image_num=1, out_points=True)
 
-        out_im = lvusg.slice_volume(self.image_dim, self.pixel_size, pose, self.voxel_size, self.origin, self.sim_tensor)
+        out_im = lvusg.slice_volume(self.image_dim, self.pixel_size, pose, self.voxel_size, self.origin, self.sim_tensor, 1, "cpu")
 
         _, axs = plt.subplots(nrows=1, ncols=2)
         axs[0].imshow(np.transpose(out_im.numpy()[0, :, 0, :, :], [1, 2, 0])) # B, W, H, D, Ch, (B, D = 1)
