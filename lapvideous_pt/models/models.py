@@ -19,6 +19,7 @@ import lapvideous_pt.generators.video_generation.utils as vru
 import lapvideous_pt.generators.ultrasound_reslicing.us_generator as lvusg
 from lapvideous_pt.generators.video_generation.video_generator import VideoLoader
 import lapvideous_pt.generators.video_generation.mesh_utils as lvvmu
+import lapvideous_pt.models.utils as mu
 
 class LapVideoUS(nn.Module):
     def __init__(self,
@@ -32,7 +33,8 @@ class LapVideoUS(nn.Module):
                  image_size,
                  output_size,
                  batch,
-                 device):
+                 device,
+                 model_config_dict=None):
         """
         Class that contains functions to synthetically
         render US and video differentiably
@@ -48,14 +50,16 @@ class LapVideoUS(nn.Module):
         :param output_size:
         :param batch:
         :param device:
+        :param model_config_dict: dict, of parameters to build nn
         """
         super().__init__()
         # Setup CUDA device.
         if not device=="cpu":
             if torch.cuda.is_available():
+                device = "cuda:0"
                 print("Using CUDA Device: ", torch.device(device))
-                device = torch.device(device)
-                torch.cuda.set_device(device)
+                device = torch.device("cuda:0")
+                # torch.cuda.set_device(device)
         else:
             device = torch.device("cpu")
 
@@ -79,12 +83,12 @@ class LapVideoUS(nn.Module):
                                   name_tensor)
         print("Mem allocated after US: ", torch.cuda.memory_allocated())
         print("Mem allocated before model build: ", torch.cuda.memory_allocated())
-        self.build_nn(output_size)
+        self.build_nn(output_size, model_config_dict)
         self.to(device).float()
         print("Mem allocated after model build: ", torch.cuda.memory_allocated())
 
 
-    def build_nn(self, image_size):
+    def build_nn(self, image_size, model_config_dict):
         """
         Class method to build neural network.
         Simple couple of convolutional layers with
@@ -92,28 +96,12 @@ class LapVideoUS(nn.Module):
         :param image_size:
         """
         print("Building Model...")
-        self.conv1 = nn.Conv2d(in_channels=7, out_channels=12, kernel_size=3, stride=1, padding=1) # Hout = Hin
-        self.conv1_bn=nn.BatchNorm2d(12)
-        self.conv2 = nn.Conv2d(in_channels=12, out_channels=12, kernel_size=3, stride=1, padding=1) # Hout = Hin
-        self.conv2_bn=nn.BatchNorm2d(12)
-        self.pool = nn.MaxPool2d(2,2)
-        self.conv4 = nn.Conv2d(in_channels=12, out_channels=24, kernel_size=5, stride=1, padding=2)
-        self.conv4_bn=nn.BatchNorm2d(24)
-        self.conv5 = nn.Conv2d(in_channels=24, out_channels=24, kernel_size=5, stride=1, padding=2) # Hout/2
-        self.conv5_bn=nn.BatchNorm2d(24)
-        self.pool2 = nn.MaxPool2d(2,2)
-        self.conv6 = nn.Conv2d(in_channels=24, out_channels=48, kernel_size=5, stride=1, padding=2)
-        self.conv6_bn=nn.BatchNorm2d(48)
-        self.conv7 = nn.Conv2d(in_channels=48, out_channels=48, kernel_size=5, stride=1, padding=2)
-        self.conv7_bn=nn.BatchNorm2d(48)
-        self.pool3 = nn.MaxPool2d(3,3)
-        self.fc1 = nn.Linear(12288, 3000)
-        self.fc_rot_1  = nn.Linear(1500, 1000)
-        self.fc_rot_2  = nn.Linear(1000, 100)
-        self.fc_rot_3  = nn.Linear(100, 8)
-        self.fc_trans_1  = nn.Linear(1500, 1000)
-        self.fc_trans_2  = nn.Linear(1000, 100)
-        self.fc_trans_3  = nn.Linear(100, 6)
+        self.conv_backbone, self.conv_backbone_names = mu.parse_model_config_convs(model_config_dict["conv_backbone"])
+        self.branch1, self.branch1_names = mu.parse_model_config_linear(model_config_dict["branch1"])
+        self.branch2, self.branch2_names = mu.parse_model_config_linear(model_config_dict["branch2"])
+        self.fc1 = nn.Linear(**model_config_dict["fc1_layer"])
+        self.split_size = model_config_dict["split_size"]
+        self.branch_split = model_config_dict["branch_split"]
         print("Model built.")
 
     def pre_process_video_files(self,
@@ -286,7 +274,7 @@ class LapVideoUS(nn.Module):
         image_tensor = torch.cat([torch.transpose(image, 3, 1), us_pad], 1) # Cat along channels
         return image_tensor, [t_c2l_norm, t_p2l_norm]
 
-    def post_process_predictions(self, rot_preds, trans_preds):
+    def post_process_predictions(self, c2l_q, c2l_t, p2l_q, p2l_t):
         """
         Class method that defines how the data from predictions
         is post processed. We assume in this case that the rotations
@@ -295,14 +283,12 @@ class LapVideoUS(nn.Module):
         are in Pytorch3d frame of reference already,
         so we can just return the Transform3d to pass directly to the
         renderer.
-        :param rot_preds: torch.Tensor, rotation predictions (8,)
-        :param trans_preds: torch.Tensor, translation predictions (6,)
+        :param c2l_q: torch.Tensor, c2l rotation predictions (B, 4,)
+        :param c2l_t: torch.Tensor, c2l translation predictions (B, 3,)
+        :param p2l_q: torch.Tensor, p2l rotation predictions (B, 4,)
+        :param p2l_t: torch.Tensor, p2l translation predictions (B, 3,)
         :return: List[Transform3d], (2,), c2l and p2l
         """
-        # Split rotations into two separate quaternions
-        c2l_q, p2l_q = torch.split(rot_preds, [4, 4], dim=1)
-        # Split translations into two separate vectors
-        c2l_t, p2l_t = torch.split(trans_preds, [3, 3], dim=1)
         # Convert quats to rot matrices
         c2l_r = p3drc.quaternion_to_matrix(c2l_q)
         p2l_r = p3drc.quaternion_to_matrix(p2l_q)
@@ -328,38 +314,61 @@ class LapVideoUS(nn.Module):
         :param us_volume: torch.Tensor, (N, W, H, D,Ch)
         :param data: torch.Tensor, (N, Ch, H, W),
                      image from GT rendering.
-        :return: [loss_im, tensor_pred]
+        :return: [loss_im, tensor_pred, norm_trans]
         """
         #### NETWORKS
-        out = F.leaky_relu(self.conv1(image_data))
-        out = F.leaky_relu(self.conv2(out))
-        out = self.pool(out)
-        out = F.leaky_relu(self.conv4(out))
-        out = F.leaky_relu(self.conv5(out))
-        out = self.pool2(out)
-        out = F.leaky_relu(self.conv6(out))
-        out = F.leaky_relu(self.conv7(out))
-        out = self.pool3(out)
+        # Backbone
+        out = image_data
+        for i, layer in enumerate(self.conv_backbone):
+            if self.conv_backbone_names[i] == "Conv2d":
+                out = F.leaky_relu(layer(out))
+            else: # Maxpool or BatchNorm
+                out = layer(out)
+
+        # Last conv layer, flatten and leaky relu
         out = torch.flatten(out, start_dim=1)
         out = F.leaky_relu(self.fc1(out))
-        # Split network results into two branches, one for rotation
-        # and one for translation.
-        out_rot, out_trans = torch.split(out, [1500, 1500], dim=1)
-        out_rot = F.leaky_relu(self.fc_rot_1(out_rot))
-        out_rot = F.leaky_relu(self.fc_rot_2(out_rot))
-        out_rot = self.fc_rot_3(out_rot) # B, 8
+        # Split network results into two branches
+        out_branch_1, out_branch_2 = torch.split(out, [self.split_size, self.split_size], dim=1)
+        
+        for i, layer in enumerate(self.branch1[:-1]):
+            if self.branch1_names[i] == "Linear":
+                out_branch_1 = F.leaky_relu(layer(out_branch_1))
+            else:
+                out_branch_1 = layer(out_branch_1)
+        # Last layer without an activation.
+        out_branch_1 = self.branch1[-1](out_branch_1)
 
-        out_trans = F.leaky_relu(self.fc_trans_1(out_trans))
-        out_trans = F.leaky_relu(self.fc_trans_2(out_trans))
-        out_trans = self.fc_trans_3(out_trans) # B, 6
+        for i, layer in enumerate(self.branch2[:-1]):
+            if self.branch2_names[i] == "Linear":
+                out_branch_2 = F.leaky_relu(layer(out_branch_2))
+            else:
+                out_branch_2 = layer(out_branch_2)
 
-        #### POST PROCESS OUTPUTS
+        # Last layer without an activation.
+        out_branch_2 = self.branch2[-1](out_branch_2)
+
+
+        #### POST PROCESS OUTPUTS - depending on architecture,
+        # split accordingly.
+        if self.branch_split == "p2l_c2l":
+            # Branches are 7 dimensional.
+            c2l_q, c2l_t = torch.split(out_branch_1, [4, 3], dim=1)
+            p2l_q, p2l_t = torch.split(out_branch_2, [4, 3], dim=1)
+        else:
+            # Branches are 8 and 6 dimensional respectively.
+            c2l_q, p2l_q = torch.split(out_branch_1, [4, 4], dim=1)
+            c2l_t, p2l_t = torch.split(out_branch_2, [3, 3], dim=1)
+
         # For translations we need a representation in bounded space
-        c2l_pytorch3d, p2l_pytorch3d = self.post_process_predictions(out_rot, out_trans)
+        c2l_pytorch3d, p2l_pytorch3d = self.post_process_predictions(c2l_q=c2l_q,
+                                                                     c2l_t=c2l_t,
+                                                                     p2l_q=p2l_q,
+                                                                     p2l_t=p2l_t)
         transform_l2c_pred = c2l_pytorch3d.inverse()
         transform_p2c_pred = p2l_pytorch3d.compose(transform_l2c_pred)
         tensor_pred, _ = self.render_data(liver_data=liver_data,
                                           transform_p2c=transform_p2c_pred.get_matrix(),
                                           transform_l2c=transform_l2c_pred.get_matrix())
         #### RETURN PRED IMAGE AND PRED TRANSFORMS
-        return tensor_pred, [c2l_pytorch3d, p2l_pytorch3d], out_trans
+        return tensor_pred, [c2l_pytorch3d, p2l_pytorch3d], torch.cat((c2l_t, p2l_t), dim=1)
