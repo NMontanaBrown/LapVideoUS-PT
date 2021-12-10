@@ -14,6 +14,7 @@ import torch.nn.functional as F
 from vtk.numpy_interface.dataset_adapter import NoneArray
 from pytorch3d.transforms import Transform3d
 from pytorch3d.transforms import rotation_conversions as p3drc
+import kornia.morphology as m
 # LapVideoUS-PT
 import lapvideous_pt.generators.video_generation.utils as vru
 import lapvideous_pt.generators.ultrasound_reslicing.us_generator as lvusg
@@ -201,7 +202,9 @@ class LapVideoUS(nn.Module):
     def render_data(self,
                     liver_data,
                     transform_l2c,
-                    transform_p2c):
+                    transform_p2c,
+                    us_noise=None,
+                    video_noise=None):
         """
         Generate some image data based on a given set
         of transforms and rendering data tensors.
@@ -212,6 +215,8 @@ class LapVideoUS(nn.Module):
         :param us_volume: torch.Tensor, (N, ...)
         :param transform_p2c: torch.Tensor, [N, 4, 4]
         :param transform_l2c: torch.Tensor, [N, 4, 4]
+        :param us_noise: List[torch.Tensor or None], (default=None), (3,), [erosion, dilation, dropout]
+        :param video_noise: List[torch.Tensor or None], (default=None), (3,), [erosion, dilation, dropout]
         :return: torch.Tensor for image and video data.
                     - (N, Ch_vid, H_vid, W_vid), 0:4 video, 4:7 US.
         """
@@ -258,6 +263,15 @@ class LapVideoUS(nn.Module):
         #### RENDERING
         # Render image
         image = self.video_loader.renderer(meshes_world=batch_meshes, R=r_l2c, T=t_l2c) # (N, B, W, Ch)
+        image = torch.transpose(image, 3, 1)
+        if video_noise:
+            if video_noise[0] is not None: # erosion
+                image = m.erosion(image, video_noise[0])
+            if video_noise[1] is not None: # dilation
+                image = m.dilation(image, video_noise[1])
+            if video_noise[2]: # dropout
+                pass
+
         # Render US
         # Base rendering objects - US
         us = lvusg.slice_volume(self.us_dict["image_dim"],
@@ -270,8 +284,16 @@ class LapVideoUS(nn.Module):
                                 self.device)
         # Batch together, reshape US into correct output size.
         us = torch.transpose(torch.transpose(torch.squeeze(us, 2), 2, 1), 2, 1) # [N, ch, H, W]
+        if us_noise:
+            if us_noise[0] is not None: # erosion
+                us = m.erosion(us, us_noise[0])
+            if us_noise[1] is not None: # dilation
+                us = m.erosion(us, us_noise[1])
+            if us_noise[2]: # dropout
+                pass
+        # Mask
         us_pad = F.pad(us, self.us_pad) # (N, Ch, Out_size[0], Out_size[1])
-        image_tensor = torch.cat([torch.transpose(image, 3, 1), us_pad], 1) # Cat along channels
+        image_tensor = torch.cat([image, us_pad], 1) # Cat along channels
         return image_tensor, [t_c2l_norm, t_p2l_norm]
 
     def post_process_predictions(self, c2l_q, c2l_t, p2l_q, p2l_t):
