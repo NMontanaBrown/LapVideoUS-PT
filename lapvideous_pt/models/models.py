@@ -35,7 +35,8 @@ class LapVideoUS(nn.Module):
                  output_size,
                  batch,
                  device,
-                 model_config_dict=None):
+                 model_config_dict=None,
+                 mask_path=None):
         """
         Class that contains functions to synthetically
         render US and video differentiably
@@ -78,10 +79,15 @@ class LapVideoUS(nn.Module):
                                      output_size,
                                      intrinsics,
                                      device)
+        if mask_path is None:
+            self.mask_path = os.path.join(mesh_dir, "us_mask.npy")
+        else:
+            self.mask_path = mask_path
         print("Mem allocated after video: ", torch.cuda.memory_allocated())
         print("Mem allocated before US: ", torch.cuda.memory_allocated())
         self.pre_process_US_files(path_us_tensors,
-                                  name_tensor)
+                                  name_tensor,
+                                  self.mask_path)
         print("Mem allocated after US: ", torch.cuda.memory_allocated())
         print("Mem allocated before model build: ", torch.cuda.memory_allocated())
         self.build_nn(output_size, model_config_dict)
@@ -139,7 +145,7 @@ class LapVideoUS(nn.Module):
         self.video_loader.setup_renderer(np_intrinsics, image_size, output_size)
         self.bounds = torch.from_numpy(np.array([500.0, 500.0, 500.0], dtype=np.float32)).to(self.device)
 
-    def pre_process_US_files(self, path_us_tensors, name_tensor):
+    def pre_process_US_files(self, path_us_tensors, name_tensor, mask_path):
         """
         Pre-process data us data for rendering.
         We assume that the files all have the same root name_tensor,
@@ -153,12 +159,16 @@ class LapVideoUS(nn.Module):
         origin = torch.from_numpy(np.load(os.path.join(path_us_tensors, name_tensor.replace(".npy", "_origin.npy")))).float().to(device=self.device)
         pix_dim = torch.from_numpy(np.load(os.path.join(path_us_tensors, name_tensor.replace(".npy",'_pixdim.npy')))).float().to(device=self.device)
         im_dim = torch.from_numpy(np.load(os.path.join(path_us_tensors, name_tensor.replace(".npy",'_imdim.npy')))).int().to(device=self.device)
+        us_mask = torch.where(torch.from_numpy(np.transpose(np.load(mask_path), [3, 2, 0, 1])).float().to(device=self.device)>0,
+                              torch.ones(1).float().to(self.device),
+                              torch.zeros(1).float().to(self.device))
         print("Im dim US: ", im_dim)
         us_dict = {"image_dim":im_dim,
                    "voxel_size":0.5,
                    "pixel_size":pix_dim,
                    "volume":volume,
-                   "origin":origin}
+                   "origin":origin,
+                   "us_mask":us_mask}
         # Calculate us diff for padding
         diff_us_size = list(self.output_size - im_dim.cpu().numpy()[0:2])
         list_padding = []
@@ -168,6 +178,7 @@ class LapVideoUS(nn.Module):
             else:
                 list_padding.extend([int(item/2), int(item/2)])
         print(tuple(list_padding))
+        # self.us_pad = tuple([list_padding[2], list_padding[3], list_padding[0], list_padding[1]])
         self.us_pad = tuple(list_padding)
         self.us_dict = us_dict
 
@@ -283,7 +294,8 @@ class LapVideoUS(nn.Module):
                                 self.batch,
                                 self.device)
         # Batch together, reshape US into correct output size.
-        us = torch.transpose(torch.transpose(torch.squeeze(us, 2), 2, 1), 2, 1) # [N, ch, H, W]
+        # B, ch, 1, 68, 83
+        us = torch.squeeze(us, 2) # [N, ch, 68, 83]
         if us_noise:
             if us_noise[0] is not None: # erosion
                 us = m.erosion(us, us_noise[0])
@@ -292,8 +304,9 @@ class LapVideoUS(nn.Module):
             if us_noise[2]: # dropout
                 pass
         # Mask
+        us = us * self.us_dict["us_mask"]
         us_pad = F.pad(us, self.us_pad) # (N, Ch, Out_size[0], Out_size[1])
-        image_tensor = torch.cat([image, us_pad], 1) # Cat along channels
+        image_tensor = torch.cat([image, torch.transpose(us_pad, 3, 2)], 1) # Cat along channels
         return image_tensor, [t_c2l_norm, t_p2l_norm]
 
     def post_process_predictions(self, c2l_q, c2l_t, p2l_q, p2l_t):
