@@ -108,12 +108,12 @@ class USTensorSlice():
                                           voxel_size=self.voxel_size,
                                           downsampling=self.downsampling,
                                           image_num=1)
-        _, binary_map_nc, _ =\
+        _, binary_map_nc, visual_mask =\
         seg_volume.simulate_image(poses=pose, image_num=1, out_points=True)
 
         out_im = lvusg.slice_volume(self.image_dim, self.pixel_size, pose, self.voxel_size, self.origin, self.sim_tensor, 1, "cpu")
 
-        _, axs = plt.subplots(nrows=1, ncols=2)
+        _, axs = plt.subplots(nrows=1, ncols=3)
         axs[0].imshow(np.transpose(out_im.numpy()[0, :, 0, :, :], [1, 2, 0])) # B, W, H, D, Ch, (B, D = 1)
         axs[0].set_title("PyTorch Rendering")
         axs[0].set_xticks([])
@@ -122,4 +122,14 @@ class USTensorSlice():
         axs[1].set_title("CUDA Rendering")
         axs[1].set_xticks([])
         axs[1].set_yticks([])
+        mask = np.where(visual_mask==visual_mask[0,0,0,0], 0, 255)
+        axs[1].imshow(np.transpose(out_im.numpy()[0, :, 0, :, :], [1, 2, 0]) * mask[:, :, :, 0])
+        axs[1].set_title("CUDA Rendering")
+        axs[1].set_xticks([])
+        axs[1].set_yticks([])
+        axs[2].imshow(mask[:, :, :, 0])
+        axs[2].set_title("Mask")
+        axs[2].set_xticks([])
+        axs[2].set_yticks([])
         plt.show()
+        np.save(os.path.abspath(os.path.join(self.mesh_dir, "US_mask.npy"), mask))
