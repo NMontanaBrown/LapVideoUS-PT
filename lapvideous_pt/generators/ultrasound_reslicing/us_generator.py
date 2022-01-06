@@ -199,7 +199,8 @@ def slice_volume(image_dim,
                  origin,
                  volume,
                  batch,
-                 device):
+                 device,
+                 return_corners=False):
     """
     Function to reslice a volume for a given pose in the
     volume.
@@ -212,8 +213,10 @@ def slice_volume(image_dim,
     :param volume: torch.Tensor, (N, W, H, D, Ch), tensor of 3D
                    volumetric features.
     :param batch: int, (N), batch size.
+    :param return_corners: bool, (False), return coordinates of the plane corners. []
     :return: planes, torch.Tensor, (N, A, B) of resliced planes
              in tensor.
+             - corner_coords, torch.Tensor (N, 4, 4), corner coordinates of planes.
     """
     coordinates_orig, shape_planes, _ = generate_cartesian_grid(im_x_size=image_dim[0],
                                                                 im_y_size=image_dim[1],
@@ -238,4 +241,20 @@ def slice_volume(image_dim,
     volume = torch.transpose(torch.transpose(torch.transpose(torch.transpose(torch.as_tensor(volume, dtype=torch.float32, device=device).expand(1, -1, -1, -1, -1), 4, 1), 4, 2), 2, 3), 4, 3)
 
     out_im = sample(volume.repeat(batch, 1, 1, 1, 1), voxel_locs_norm)
+    if return_corners:
+        return out_im, return_corner_coords(coordinates_planes)
     return out_im
+
+def return_corner_coords(coordinate_planes):
+    """
+    Extract the corner coordinates from the coordinate
+    planes.
+    :param coordinate_planes: torch.Tensor, [B, N, M, 1, 4]
+    :return corner_coords: torch.Tensor, [B, 4, 3]
+    """
+    left_upper = coordinate_planes[:, 0, 0, :, 0:3] # B, 1, 4
+    right_upper = coordinate_planes[:, 0, -1, :, 0:3] # B, 1, 4
+    left_lower = coordinate_planes[:, -1, 0, :, 0:3] # B, 1, 4
+    right_lower = coordinate_planes[:, -1, -1, :, 0:3] # B, 1, 4
+    corner_coords = torch.cat([left_upper, right_upper, left_lower, right_lower], axis=1)
+    return corner_coords
