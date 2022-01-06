@@ -210,26 +210,22 @@ class LapVideoUS(nn.Module):
         return [[verts_liver_batch, batch_faces_liver, batch_textures_liver], \
                [verts_probe_batch, batch_faces_probe, batch_textures_probe]]
 
-    def render_data(self,
-                    liver_data,
-                    transform_l2c,
-                    transform_p2c,
-                    us_noise=None,
-                    video_noise=None):
+    def get_transformed_verts(self,
+                              liver_data,
+                              transform_l2c,
+                              transform_p2c):
         """
-        Generate some image data based on a given set
-        of transforms and rendering data tensors.
-        :param liver_data: List[List[torch.Tensor]], (2,), data for differentiable
-                            video rendering:
-                            - [verts_liver_batch, batch_faces_liver, batch_textures_liver]
-                            - [verts_probe_batch, batch_faces_probe, batch_textures_probe]
-        :param us_volume: torch.Tensor, (N, ...)
-        :param transform_p2c: torch.Tensor, [N, 4, 4]
-        :param transform_l2c: torch.Tensor, [N, 4, 4]
-        :param us_noise: List[torch.Tensor or None], (default=None), (3,), [erosion, dilation, dropout]
-        :param video_noise: List[torch.Tensor or None], (default=None), (3,), [erosion, dilation, dropout]
-        :return: torch.Tensor for image and video data.
-                    - (N, Ch_vid, H_vid, W_vid), 0:4 video, 4:7 US.
+        Method to transform homogenous vertices by given transformations.
+        :param liver_data:
+        :param transform_l2c: torch.Tensor
+        :param transform_p2c: torch.Tensor
+        :return:
+            - verts_probe_unbatched
+            - r_l2c, t_l2c
+            - r_c2l, t_c2l
+            - r_p2l, t_p2l
+            - M_p2l_slicesampler
+
         """
         # We pass some p2c and l2c into the renderer.
         transform_p2c_perturbed = Transform3d(matrix=transform_p2c, device=self.device)
@@ -256,6 +252,34 @@ class LapVideoUS(nn.Module):
                                                                  liver_data[1][0],
                                                                  self.batch,
                                                                  self.device)
+        return verts_probe_unbatched, [r_l2c, t_l2c], [r_c2l, t_c2l], [r_p2l, t_p2l], M_p2l_slicesampler
+
+    def render_data(self,
+                    liver_data,
+                    transform_l2c,
+                    transform_p2c,
+                    us_noise=None,
+                    video_noise=None):
+        """
+        Generate some image data based on a given set
+        of transforms and rendering data tensors.
+        :param liver_data: List[List[torch.Tensor]], (2,), data for differentiable
+                            video rendering:
+                            - [verts_liver_batch, batch_faces_liver, batch_textures_liver]
+                            - [verts_probe_batch, batch_faces_probe, batch_textures_probe]
+        :param us_volume: torch.Tensor, (N, ...)
+        :param transform_p2c: torch.Tensor, [N, 4, 4]
+        :param transform_l2c: torch.Tensor, [N, 4, 4]
+        :param us_noise: List[torch.Tensor or None], (default=None), (3,), [erosion, dilation, dropout]
+        :param video_noise: List[torch.Tensor or None], (default=None), (3,), [erosion, dilation, dropout]
+        :return: torch.Tensor for image and video data.
+                    - (N, Ch_vid, H_vid, W_vid), 0:4 video, 4:7 US.
+        """
+        verts_probe_unbatched, liver_transform, camera_transform, probe_transform, M_p2l_slicesampler =\
+            self.get_transformed_verts(liver_data, transform_l2c,transform_p2c)
+        r_l2c, t_l2c = liver_transform
+        r_c2l, t_c2l = camera_transform
+        r_p2l, t_p2l = probe_transform
         verts_liver_unbatched = torch.split(liver_data[0][0],  [1 for i in range(self.batch)], 0)
         faces_liver_unbatched = torch.split(liver_data[0][1],  [1 for i in range(self.batch)], 0)
         faces_probe_unbatched = torch.split(liver_data[1][1],  [1 for i in range(self.batch)], 0)
