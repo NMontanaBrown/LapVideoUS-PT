@@ -36,7 +36,8 @@ class LapVideoUS(nn.Module):
                  batch,
                  device,
                  model_config_dict=None,
-                 mask_path=None):
+                 mask_path=None,
+                 alpha=None):
         """
         Class that contains functions to synthetically
         render US and video differentiably
@@ -53,6 +54,9 @@ class LapVideoUS(nn.Module):
         :param batch:
         :param device:
         :param model_config_dict: dict, of parameters to build nn
+        :param mask_path: str, default=None
+        :param alpha: bool, default=None, defines whether or not alpha channel
+                      in renderer is being used.
         """
         super().__init__()
         # Setup CUDA device.
@@ -70,6 +74,7 @@ class LapVideoUS(nn.Module):
         self.batch = batch
         self.image_size = image_size
         self.output_size = output_size
+        self.alpha=alpha
         print("Mem allocated before video: ", torch.cuda.memory_allocated())
         self.pre_process_video_files(mesh_dir,
                                      config_dir,
@@ -330,6 +335,9 @@ class LapVideoUS(nn.Module):
         # Mask
         us = us * self.us_dict["us_mask"]
         us_pad = F.pad(us, self.us_pad) # (N, Ch, Out_size[0], Out_size[1])
+        if self.alpha is None:
+            # Get rid of the alpha channel in rendering.
+            image = image[:, 0:3, :, :]
         image_tensor = torch.cat([image, torch.transpose(us_pad, 3, 2)], 1) # Cat along channels
         return image_tensor, [t_c2l_norm, t_p2l_norm]
 
