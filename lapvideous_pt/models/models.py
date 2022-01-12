@@ -60,12 +60,15 @@ class LapVideoUS(nn.Module):
         """
         super().__init__()
         # Setup CUDA device.
-        if not device=="cpu":
+        if device == "cluster":
             if torch.cuda.is_available():
                 device = "cuda:0"
                 print("Using CUDA Device: ", torch.device(device))
                 device = torch.device("cuda:0")
-                # torch.cuda.set_device(device)
+        elif not device=="cpu":
+            if torch.cuda.is_available():
+                print("Using CUDA Device: ", torch.device(device))
+                device = torch.device(device)
         else:
             device = torch.device("cpu")
 
