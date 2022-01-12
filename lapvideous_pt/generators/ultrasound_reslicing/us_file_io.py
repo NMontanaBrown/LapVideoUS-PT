@@ -132,4 +132,4 @@ class USTensorSlice():
         axs[2].set_xticks([])
         axs[2].set_yticks([])
         plt.show()
-        np.save(os.path.abspath(os.path.join(self.mesh_dir, "US_mask.npy"), mask))
+        np.save(os.path.abspath(os.path.join(self.mesh_dir, "US_mask.npy")), mask)
