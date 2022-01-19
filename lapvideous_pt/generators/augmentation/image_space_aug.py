@@ -10,7 +10,6 @@ import torch
 import numpy as np
 from kornia.contrib import connected_components as cc
 
-
 def delete_feature(image, num_iterations, num_features_del, min_size_features, max_size_features, device):
     """
     Given an image tensor, find all connected components,
@@ -60,6 +59,30 @@ def delete_feature(image, num_iterations, num_features_del, min_size_features, m
     final_image = torch.sum(torch.cat(modified_features[1:]), 0) # Don't sum the background
     return final_image
 
+def delete_batch_feature(image, num_iterations, num_features_del, min_size_features, max_size_features, device):
+    """
+    Given an image tensor, find all connected components,
+    then, pick a number of them and erase them from the
+    image.
+    :param image: torch.Tensor
+    :param num_iterations: int, 
+    :param num_features_del: int,
+    :param min_size_features: int, minimum area (pixels) of image that can be deleted
+    :param max_size_features: int, max area (pixels) of image that can be deleted
+    :param device:
+    :return: torch.Tensor
+    """
+    # Split batchwise
+    batch_split_image = torch.split(image, 1)
+    # Modify each batch separately
+    modified_ims = [delete_feature(item,
+                                   num_iterations,
+                                   num_features_del,
+                                   min_size_features,
+                                   max_size_features,
+                                   device) for item in batch_split_image]
+    batch_join = torch.cat(modified_ims, dim=0) # Join batchwise
+    return batch_join
 
 def add_feature(image, num_iterations, num_features_add, min_size_features, max_size_features):
     """
