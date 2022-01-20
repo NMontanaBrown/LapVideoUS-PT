@@ -21,6 +21,7 @@ import lapvideous_pt.generators.ultrasound_reslicing.us_generator as lvusg
 from lapvideous_pt.generators.video_generation.video_generator import VideoLoader
 import lapvideous_pt.generators.video_generation.mesh_utils as lvvmu
 import lapvideous_pt.models.utils as mu
+import lapvideous_pt.generators.augmentation.image_space_aug as lvisa
 
 class LapVideoUS(nn.Module):
     def __init__(self,
@@ -96,6 +97,13 @@ class LapVideoUS(nn.Module):
         self.pre_process_US_files(path_us_tensors,
                                   name_tensor,
                                   self.mask_path)
+        # Default no us augmentation
+        self.us_dropout_params = {"channel_ops":None,
+                                  "num_iterations":None,
+                                  "num_features_del":None,
+                                  "min_size_features":None,
+                                  "max_size_features":None
+                                 }
         print("Mem allocated after US: ", torch.cuda.memory_allocated())
         print("Mem allocated before model build: ", torch.cuda.memory_allocated())
         self.build_nn(output_size, model_config_dict)
@@ -152,6 +160,35 @@ class LapVideoUS(nn.Module):
         np_intrinsics = np.loadtxt(intrinsics)
         self.video_loader.setup_renderer(np_intrinsics, image_size, output_size)
         self.bounds = torch.from_numpy(np.array([500.0, 500.0, 500.0], dtype=np.float32)).to(self.device)
+
+    def define_dropout_params(self,
+                              channel_ops,
+                              num_iterations,
+                              num_features_del,
+                              min_size_features,
+                              max_size_features):
+        """
+        Method to modify the US dropout params, which
+        by default are constructed as all False.
+
+        :param channel_ops: List[Bool]
+        :param num_iterations: int,
+        :param num_features_del: List[int]
+        :param min_size_feaures: List[int]
+        :param max_size_features: List[int]
+        """
+        # Check all lists are the same size
+        assert len({len(i) for i in [channel_ops,
+                                     num_iterations,
+                                     num_features_del,
+                                     min_size_features,
+                                     max_size_features]}) == 1
+        self.us_dropout_params = {"channel_ops":channel_ops,
+                                  "num_iterations":num_iterations,
+                                  "num_features_del":num_features_del,
+                                  "min_size_features":min_size_features,
+                                  "max_size_features":max_size_features
+                                 }
 
     def pre_process_US_files(self, path_us_tensors, name_tensor, mask_path):
         """
@@ -329,12 +366,18 @@ class LapVideoUS(nn.Module):
         # B, ch, 1, 68, 83
         us = torch.squeeze(us, 2) # [N, ch, 68, 83]
         if us_noise:
+            if us_noise[2] is not None: # dropout/delete vessels
+                us = lvisa.delete_channel_features(us,
+                                                   us_noise[2],
+                                                   self.us_dropout_params["num_iterations"],
+                                                   self.us_dropout_params["num_features_del"],
+                                                   self.us_dropout_params["min_size_features"],
+                                                   self.us_dropout_params["max_size_features"])
             if us_noise[0] is not None: # erosion
                 us = m.erosion(us, us_noise[0])
             if us_noise[1] is not None: # dilation
                 us = m.erosion(us, us_noise[1])
-            if us_noise[2]: # dropout
-                pass
+
         # Mask
         us = us * self.us_dict["us_mask"]
         us_pad = F.pad(us, self.us_pad) # (N, Ch, Out_size[0], Out_size[1])
