@@ -193,12 +193,21 @@ def test_detect_delete_components_channel():
                       [0, 0, 0, 0, 0, 1, 1]]]
                     ]
     )).float() # 2, 3, 4, 7
-    feature_del_3 = delete_channel_features(test_tensor,
+    feature_del_3_1 = delete_channel_features(test_tensor,
                                             [True, False, True],
                                             100,
                                             [1, None, 1],
                                             [3, None, 1],
                                             [3, None, 1],
                                             "cpu")
-    assert np.array_equal(np.squeeze(feature_del_3.numpy()),
+    feature_del_3 = delete_channel_features(test_tensor,
+                                            [True, False, True],
+                                            100,
+                                            [1, None, 1],
+                                            [3, None, 3],
+                                            [3, None, 3],
+                                            "cpu")
+    assert np.array_equal(np.squeeze(feature_del_3_1.numpy()),
                     np.squeeze(test_tensor_no_3_1.numpy()))
+    assert np.array_equal(np.squeeze(feature_del_3.numpy()),
+                    np.squeeze(test_tensor_no_3.numpy()))
