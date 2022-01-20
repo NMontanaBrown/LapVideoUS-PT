@@ -56,7 +56,7 @@ def delete_feature(image, num_iterations, num_features_del, min_size_features, m
 
     # Modify individual features
     modified_features = [torch.zeros_like(feature).to(device) if choices[i]==torch.ones(1).to(device) else feature for i, feature in enumerate(individual_features)]
-    final_image = torch.sum(torch.cat(modified_features[1:]), 0) # Don't sum the background
+    final_image = torch.sum(torch.cat(modified_features[1:]), 0, keepdim=True) # Don't sum the background
     return final_image
 
 def delete_batch_feature(image, num_iterations, num_features_del, min_size_features, max_size_features, device):
@@ -73,7 +73,7 @@ def delete_batch_feature(image, num_iterations, num_features_del, min_size_featu
     :return: torch.Tensor
     """
     # Split batchwise
-    batch_split_image = torch.split(image, 1)
+    batch_split_image = torch.split(image, 1, dim=0)
     # Modify each batch separately
     modified_ims = [delete_feature(item,
                                    num_iterations,
@@ -83,6 +83,43 @@ def delete_batch_feature(image, num_iterations, num_features_del, min_size_featu
                                    device) for item in batch_split_image]
     batch_join = torch.cat(modified_ims, dim=0) # Join batchwise
     return batch_join
+
+def delete_channel_features(image,
+                            channel_ops,
+                            num_iterations,
+                            num_features_del,
+                            min_size_features,
+                            max_size_features,
+                            device):
+    """
+    Given an image tensor with Ch channels, and Ch 
+    :param image: torch.Tensor, [B, Ch, W, H]
+    :param channel_ops: List[Bool], which channels to apply operations
+                        on, True=features will be deleted, False=original
+                        image returned.
+    :param num_iterations: int,
+    :param num_features_del: List[int | None], (Ch)
+    :param min_size_features: List[int | None], (Ch)
+    :param max_size_features: List[int | None], (Ch)
+    :param device: str,
+    :return: torch.Tensor, [B, Ch, W, H]
+    """
+    channel_split_image = torch.split(image, 1, dim=1) # List[torch.Tensor]
+    for item in channel_split_image:
+        print(item.shape)
+    # Modify each channel separately
+    modified_channels = [delete_batch_feature(channel_image,
+                                              num_iterations,
+                                              num_features_del[i],
+                                              min_size_features[i],
+                                              max_size_features[i],
+                                              device) if channel_ops[i] == True else channel_image for i, channel_image in enumerate(channel_split_image)]
+    # Channel join
+    for item in modified_channels:
+        print(item.shape)
+    channel_join = torch.cat(modified_channels, dim=1)
+    return channel_join            
+
 
 def add_feature(image, num_iterations, num_features_add, min_size_features, max_size_features):
     """
@@ -119,6 +156,20 @@ def generate_kernel(kernel_value, range_value:int, proba:float, device):
     else:
         kernel = None
     return kernel
+
+def generate_dropout_params(dropout_params, proba:float, device):
+    """
+    
+    """
+    if dropout_params is not None:
+        if np.random.rand() > proba:
+            kernel = None
+        else:
+            kernel = None
+    else:
+        kernel = None
+    return kernel
+
 
 def generate_erosion_dilation_kernels_lists(us_erosion_dil_list,
                                             vid_erosion_dil_list,

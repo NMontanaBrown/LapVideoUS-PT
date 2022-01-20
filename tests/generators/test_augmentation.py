@@ -7,7 +7,7 @@ Test module for generators/test_augmentation.py
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
-from lapvideous_pt.generators.augmentation.image_space_aug import delete_feature, delete_batch_feature
+from lapvideous_pt.generators.augmentation.image_space_aug import delete_feature, delete_batch_feature, delete_channel_features
 
 
 def test_detect_delete_components():
@@ -82,4 +82,123 @@ def test_detect_delete_components_batch():
     feature_del_3 = delete_batch_feature(test_tensor, 100, 1, 3, 3, "cpu")
     assert np.array_equal(np.squeeze(feature_del_3.numpy()),
                     np.squeeze(test_tensor_no_3.numpy()))
-    
+
+def test_detect_delete_components_channel():
+    """
+    Test to check the correct items are deleted from
+    a test image tensor with different sized features.
+    """
+    test_tensor = torch.from_numpy(np.array(
+                    [
+                      [[[1, 1, 0, 0, 0, 0, 0],
+                      [1, 0, 0, 1, 1, 0, 0],
+                      [0, 0, 0, 0, 0, 0, 0],
+                      [1, 0, 0, 0, 0, 0, 0]],
+                      
+                      [[1, 1, 0, 0, 0, 0, 0],
+                      [1, 0, 0, 1, 1, 0, 0],
+                      [0, 0, 0, 0, 0, 0, 0],
+                      [1, 0, 0, 0, 0, 0, 0]],
+                      
+                      [[1, 1, 0, 0, 0, 0, 0],
+                      [1, 0, 0, 1, 1, 0, 0],
+                      [0, 0, 0, 0, 0, 0, 0],
+                      [1, 0, 0, 0, 0, 0, 0]],
+                      
+                      ],
+
+                      [[[1, 1, 0, 0, 0, 0, 0],
+                      [0, 0, 0, 1, 1, 0, 0],
+                      [0, 0, 0, 0, 0, 0, 1],
+                      [1, 0, 0, 0, 0, 1, 1]],
+
+                      [[1, 1, 0, 0, 0, 0, 0],
+                      [0, 0, 0, 1, 1, 0, 0],
+                      [0, 0, 0, 0, 0, 0, 1],
+                      [1, 0, 0, 0, 0, 1, 1]],
+
+                      [[1, 1, 0, 0, 0, 0, 0],
+                      [0, 0, 0, 1, 1, 0, 0],
+                      [0, 0, 0, 0, 0, 0, 1],
+                      [1, 0, 0, 0, 0, 1, 1]]]
+                    ]
+    )).float() # 2, 3, 4, 7
+
+    test_tensor_no_3 = torch.from_numpy(np.array(
+                    [
+                      [[[0, 0, 0, 0, 0, 0, 0],
+                      [0, 0, 0, 1, 1, 0, 0],
+                      [0, 0, 0, 0, 0, 0, 0],
+                      [1, 0, 0, 0, 0, 0, 0]],
+                      
+                      [[1, 1, 0, 0, 0, 0, 0],
+                      [1, 0, 0, 1, 1, 0, 0],
+                      [0, 0, 0, 0, 0, 0, 0],
+                      [1, 0, 0, 0, 0, 0, 0]],
+                      
+                      [[0, 0, 0, 0, 0, 0, 0],
+                      [0, 0, 0, 1, 1, 0, 0],
+                      [0, 0, 0, 0, 0, 0, 0],
+                      [1, 0, 0, 0, 0, 0, 0]],
+                      ],
+
+                      [[[1, 1, 0, 0, 0, 0, 0],
+                      [0, 0, 0, 1, 1, 0, 0],
+                      [0, 0, 0, 0, 0, 0, 0],
+                      [1, 0, 0, 0, 0, 0, 0]],
+
+                      [[1, 1, 0, 0, 0, 0, 0],
+                      [0, 0, 0, 1, 1, 0, 0],
+                      [0, 0, 0, 0, 0, 0, 1],
+                      [1, 0, 0, 0, 0, 1, 1]],
+
+                      [[1, 1, 0, 0, 0, 0, 0],
+                      [0, 0, 0, 1, 1, 0, 0],
+                      [0, 0, 0, 0, 0, 0, 0],
+                      [1, 0, 0, 0, 0, 0, 0]]]
+                    ]
+    )).float() # 2, 3, 4, 7
+
+    test_tensor_no_3_1 = torch.from_numpy(np.array(
+                    [
+                      [[[0, 0, 0, 0, 0, 0, 0],
+                      [0, 0, 0, 1, 1, 0, 0],
+                      [0, 0, 0, 0, 0, 0, 0],
+                      [1, 0, 0, 0, 0, 0, 0]],
+                      
+                      [[1, 1, 0, 0, 0, 0, 0],
+                      [1, 0, 0, 1, 1, 0, 0],
+                      [0, 0, 0, 0, 0, 0, 0],
+                      [1, 0, 0, 0, 0, 0, 0]],
+                      
+                      [[1, 1, 0, 0, 0, 0, 0],
+                      [1, 0, 0, 1, 1, 0, 0],
+                      [0, 0, 0, 0, 0, 0, 0],
+                      [0, 0, 0, 0, 0, 0, 0]],
+                      ],
+
+                      [[[1, 1, 0, 0, 0, 0, 0],
+                      [0, 0, 0, 1, 1, 0, 0],
+                      [0, 0, 0, 0, 0, 0, 0],
+                      [1, 0, 0, 0, 0, 0, 0]],
+
+                      [[1, 1, 0, 0, 0, 0, 0],
+                      [0, 0, 0, 1, 1, 0, 0],
+                      [0, 0, 0, 0, 0, 0, 1],
+                      [1, 0, 0, 0, 0, 1, 1]],
+
+                      [[1, 1, 0, 0, 0, 0, 0],
+                      [0, 0, 0, 1, 1, 0, 0],
+                      [0, 0, 0, 0, 0, 0, 1],
+                      [0, 0, 0, 0, 0, 1, 1]]]
+                    ]
+    )).float() # 2, 3, 4, 7
+    feature_del_3 = delete_channel_features(test_tensor,
+                                            [True, False, True],
+                                            100,
+                                            [1, None, 1],
+                                            [3, None, 1],
+                                            [3, None, 1],
+                                            "cpu")
+    assert np.array_equal(np.squeeze(feature_del_3.numpy()),
+                    np.squeeze(test_tensor_no_3_1.numpy()))
