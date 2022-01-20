@@ -38,7 +38,8 @@ class LapVideoUS(nn.Module):
                  device,
                  model_config_dict=None,
                  mask_path=None,
-                 alpha=None):
+                 alpha=None,
+                 loss_dict=None):
         """
         Class that contains functions to synthetically
         render US and video differentiably
@@ -58,6 +59,7 @@ class LapVideoUS(nn.Module):
         :param mask_path: str, default=None
         :param alpha: bool, default=None, defines whether or not alpha channel
                       in renderer is being used.
+        :param loss_dict: List[float], default=None, defines loss behaviour.
         """
         super().__init__()
         # Setup CUDA device.
@@ -92,6 +94,17 @@ class LapVideoUS(nn.Module):
             self.mask_path = os.path.join(mesh_dir, "us_mask.npy")
         else:
             self.mask_path = mask_path
+        if loss_dict is None:
+            self.loss_dict_weights = {"c2l_r":100.0,
+                                      "p2l_r":100.0,
+                                      "c2l_t":1/100.0,
+                                      "p2l_t":1/100.0,
+                                      "im_ch_1":1/100.0,
+                                      "im_ch_2":1/100.0,
+                                      "im_ch_3":1/100.0}
+        else:
+            self.loss_dict_weights = loss_dict
+
         print("Mem allocated after video: ", torch.cuda.memory_allocated())
         print("Mem allocated before US: ", torch.cuda.memory_allocated())
         self.pre_process_US_files(path_us_tensors,
