@@ -105,8 +105,6 @@ def delete_channel_features(image,
     :return: torch.Tensor, [B, Ch, W, H]
     """
     channel_split_image = torch.split(image, 1, dim=1) # List[torch.Tensor]
-    for item in channel_split_image:
-        print(item.shape)
     # Modify each channel separately
     modified_channels = [delete_batch_feature(channel_image,
                                               num_iterations,
@@ -115,8 +113,6 @@ def delete_channel_features(image,
                                               max_size_features[i],
                                               device) if channel_ops[i] == True else channel_image for i, channel_image in enumerate(channel_split_image)]
     # Channel join
-    for item in modified_channels:
-        print(item.shape)
     channel_join = torch.cat(modified_channels, dim=1)
     return channel_join            
 
