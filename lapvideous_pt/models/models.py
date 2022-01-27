@@ -112,6 +112,7 @@ class LapVideoUS(nn.Module):
                                   self.mask_path)
         # Default no us augmentation
         self.us_dropout_params = {"channel_ops":None,
+                                  "proba_dropout":None,
                                   "num_iterations":None,
                                   "num_features_del":None,
                                   "min_size_features":None,
