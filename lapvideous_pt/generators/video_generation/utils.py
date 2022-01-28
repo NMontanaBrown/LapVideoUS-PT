@@ -444,3 +444,20 @@ def perturb_orig_matrices_in_CV_space(transform_l2c,
     transform_l2c_perturbed = Transform3d(matrix=transform_l2c_perturbed)
     transform_p2c_perturbed = Transform3d(matrix=transform_p2l_perturbed).compose(transform_l2c_perturbed)
     return transform_l2c_perturbed, transform_p2c_perturbed
+
+def get_cv_matrices(l2c, p2c=None, p2l=None, device=None):
+    """
+    Function to convert sets of poses
+    into cv version
+    :param l2c: Transform3d representing l2c pose
+    :param p2c: Transform3d representing p2c pose
+    :param p2l: Transform3d represeting p2l pose
+    :param device: str or cuda device
+    """
+    if not p2l:
+        p2l = p2c.compose(l2c.inverse())
+    p2l_r_gl, p2l_t_gl = split_opengl_hom_matrix(p2l.get_matrix())
+    l2c_r_gl, l2c_t_gl = split_opengl_hom_matrix(l2c.get_matrix())
+    p2l_cv, _, _ = opengl_to_opencv_p2l(p2l_r_gl, p2l_t_gl, device)
+    l2c_cv, _, _ = opengl_to_opencv(l2c_r_gl, l2c_t_gl, device)
+    return l2c_cv, p2l_cv
