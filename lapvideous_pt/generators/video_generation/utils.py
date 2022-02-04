@@ -103,6 +103,25 @@ def p2l_2_slicesampler_numpy(pose):
     new_pose[:, 3] = pose[:, 3] # translation is the same.
     return new_pose
 
+def slicesampler_2_p2l_numpy(pose):
+    """
+    Function to convert slicesampler output into p2l frame of reference.
+
+    :param pose: np.array, (4,4) homogenous transformation
+                    representing slicesampler pose.
+    :return: new_pose, np.array, (4,4) homogenous transformation
+                of US plane characterization for SL frame of reference.
+    """
+    new_pose = np.eye(4)
+    y_p2l = -pose[0:3, 0]
+    z_p2l = pose[0:3, 1]
+    x_p2l = np.cross(y_p2l, z_p2l)
+    new_pose[:3, 0] = x_p2l
+    new_pose[:3, 1] = y_p2l
+    new_pose[:3, 2] = z_p2l
+    new_pose[:, 3] = pose[:, 3]
+    return new_pose
+
 def opencv_to_opengl(matrix_R, matrix_T, device):
     """
     Converts [N, 3, 3], [B, 3] left-handed (A = Bx)

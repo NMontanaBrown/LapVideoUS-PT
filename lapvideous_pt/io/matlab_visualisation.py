@@ -5,6 +5,7 @@ Functions to generate visualisations for MATLAB
 """
 
 import os
+import torch
 import argparse
 import numpy as np
 import scipy.io as sio
@@ -36,7 +37,7 @@ def generate_matlab_vis_files(path_to_files,
     l2c = np.loadtxt(os.path.join(path_to_files, "spp_liver2camera.txt"))
     p2c = np.loadtxt(os.path.join(path_to_files, "spp_probe2camera.txt"))
     p2l = np.linalg.inv(l2c) @ p2c
-    p2l_slicesampler = vru.p2l_2_slicesampler(p2l)
+    p2l_slicesampler = vru.p2l_2_slicesampler_numpy(p2l)
 
     # Which surface model to generate
     list_surfaces = ["spp_liver_normalised",
@@ -152,7 +153,8 @@ def save_formatted_data(path_save_vis,
                         filename,
                         image_tensor,
                         render_items,
-                        lus_g):
+                        lus_g,
+                        names=None):
     """
     Function to save data in standard format to MATLAB
     rendering. 
@@ -161,10 +163,15 @@ def save_formatted_data(path_save_vis,
     :param image_tensor: torch.Tensor, [B, CH, W, H] of image data
     :param render_items: List[list], output of sim_slicesampler_plane
     :param lus_g: slicesampler object.
+    :param names: List[str] or None, defining variable names
+                  of rendered images, us planes, cam pose and us pose.
     """
+    if names is None:
+        names = ["ims", "planes", "cam_pose", "lus_pose"]
+
     sio.savemat(os.path.join(path_save_vis, filename),
-                    {"ims": np.transpose(image_tensor.detach().cpu().numpy(), [0, 3, 2, 1]),
-                    "planes": render_items[0],
+                    {names[0]: image_tensor,
+                    names[1]: render_items[0],
                     "liver_points": lus_g.meshes['spp_liver_normalised'].vertices,
                     "HV_points": lus_g.meshes['hepatic_veins'].vertices,
                     "PV_points": lus_g.meshes['portal_vein'].vertices,
@@ -173,8 +180,8 @@ def save_formatted_data(path_save_vis,
                     "HV_faces": lus_g.meshes['hepatic_veins'].faces,
                     "PV_faces": lus_g.meshes['portal_vein'].faces,
                     "arteries_faces": lus_g.meshes['arteries'].faces,
-                    "cam_pose": render_items[3],
-                    "lus_pose": render_items[4],
+                    names[2]: render_items[3],
+                    names[3]: render_items[4],
                     "quiver_lus":render_items[5],
                     "quiver_cam" : render_items[6]
                     }
