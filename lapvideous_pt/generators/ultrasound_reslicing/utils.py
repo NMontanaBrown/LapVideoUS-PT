@@ -11,8 +11,7 @@ import vtk
 import vtk.numpy_interface.dataset_adapter as dsa
 from vtk.util.numpy_support import vtk_to_numpy
 import sksurgerycore.algorithms.procrustes as p
-
-
+from sksurgeryvtk.utils.matrix_utils import create_matrix_from_list
 
 def get_model_vertices_faces_normals(path_vtk):
     """
@@ -101,3 +100,39 @@ def generate_close_poses(pose, points, normals, num_poses=10):
     new_poses_normals = normals[indices[:num_poses], :]
     new_poses = pose_constructor(new_poses_normals, new_poses_points)
     return new_poses, distance
+
+def get_point_range_for_matrices(pose, sim_params):
+    """
+    For a given initial simulation pose, and a set
+    of training simulation parameters, generate the
+    coordinates that bound the object movement
+    in it's frame of reference.
+    :param pose: np.array, (4, 4) homogenous transform
+                 defining original simulation pose.
+    :param sim_params: list, (3) or (6), defining translation
+                       simulation params +-tx, +-ty, +-tz in that
+                       order. A (3) list will use each parameter
+                       as the std on a zero-mean range.
+    :return: np.array, [8, 3], coordinates defining
+             bounding box of the movement for that pose. 
+    """
+    # List of l2c points
+    if len(sim_params)==3:
+        xx, yy, zz = np.meshgrid([-sim_params[0], sim_params[0]],
+                                [-sim_params[1], sim_params[1]],
+                                [-sim_params[2], sim_params[2]])
+    else: # len 6
+        xx, yy, zz = np.meshgrid([sim_params[0], sim_params[1]],
+                                [sim_params[2], sim_params[3]],
+                                [sim_params[4], sim_params[5]])
+    xx_all = np.ravel(xx)
+    yy_all = np.ravel(yy)
+    zz_all = np.ravel(zz)
+    points = []
+
+    for i in range(xx_all.shape[0]):
+        mat_t = create_matrix_from_list([0,0,0, xx_all[i], yy_all[i], zz_all[i]],
+                                        is_in_radians=False)
+        transformed_array = mat_t @ pose
+        points.append(transformed_array[:3, 3])
+    return np.array(points)
