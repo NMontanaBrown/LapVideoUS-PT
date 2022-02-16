@@ -99,15 +99,18 @@ class VideoLoader():
 
         self.meshes = meshes
 
-    def setup_renderer(self, intrinsics, image_size, output_size):
+    def setup_renderer(self,
+                       intrinsics=(1892.33, 944.889),
+                       principal_point=(1105.87, 752.693),
+                       image_size=(1920.0, 1080.0),
+                       output_size=200):
         """
         Sets up a Perspective camera from a series of OpenCV
         parameters
-        :param intrinsics: np.array of camera intrinsics. OpenCV
-                           style.
-        :param image_size: list, (2,). Camera dimensions for original
-                           calibration matrix.
-        :param output_size: list, (2,). Image dimensions output.
+        :param intrinsics: tuple,
+        :param principal_point: tuple,
+        :param image_size: tuple,
+        :param output_size: list, (2,) or int. Image dimensions output.
                             PyTorch3d rescales the data to this
                             output size.
         :return: void
@@ -116,9 +119,9 @@ class VideoLoader():
         # Hard code faces per bin - otherwise we can get patches
         # missing from the pictures rendered. See issue #1 for details.
         self.cameras = PerspectiveCameras(
-            focal_length=((1892.33, 944.889),),
-            principal_point=((1105.87, 752.693),),
-            image_size=((1920.0, 1080.0),),
+            focal_length=(intrinsics,),
+            principal_point=(principal_point,),
+            image_size=(image_size,),
             device=self.device)
 
         # Create a phong mesh renderer.
@@ -126,7 +129,7 @@ class VideoLoader():
         blend_params = BlendParams(background_color=(0, 0, 0))
 
         raster_settings = RasterizationSettings(
-            image_size=200,
+            image_size=output_size,
             blur_radius=0.0,
             faces_per_pixel=1,
             max_faces_per_bin=100000,

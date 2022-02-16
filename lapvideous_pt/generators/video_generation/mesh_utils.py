@@ -55,6 +55,26 @@ def generate_composite_probe_and_liver_meshes(verts_liver_unbatched,
     batch_meshes = join_meshes_as_batch(scene_meshes)
     return batch_meshes
 
+def generate_object_mesh(verts_object_unbatched,
+                         faces_object,
+                         textures_object,
+                         batch):
+    """
+    Generate mesh objects given a series of transformed
+    verts coordinates, faces, textures.
+    :param verts_object_unbatched: List[torch.Tensor], (N,), vertices
+                        of object mesh.
+    :param faces_object: List[torch.Tensor], Nx(F,), faces of object mesh. 
+    :param textures_object:
+    :return: List[Meshes], (N,)
+    """
+    scene_meshes = [
+            join_meshes_as_scene([Meshes(verts=verts_object_unbatched[i],
+                                         faces=faces_object[i],
+                                         textures=textures_object[i])]) for i in range(batch)]
+    batch_meshes = join_meshes_as_batch(scene_meshes)
+    return batch_meshes
+
 def verts_transformed_from_preds(c2l, p2c, verts_probe, verts_liver):
     """
     Creates a batch of transformed probe vertices in liver
