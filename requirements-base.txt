@@ -10,3 +10,5 @@ torchvision==0.7.0
 pytorch3d
 imageio
 vtk
+kornia==0.5.8
+seaborn
