@@ -22,6 +22,7 @@ from lapvideous_pt.generators.video_generation.video_generator import VideoLoade
 import lapvideous_pt.generators.video_generation.mesh_utils as lvvmu
 import lapvideous_pt.models.utils as mu
 import lapvideous_pt.generators.augmentation.image_space_aug as lvisa
+import lapvideous_pt.models.render as lvrender
 
 class LapVideoUS(nn.Module):
     def __init__(self,
@@ -274,7 +275,8 @@ class LapVideoUS(nn.Module):
                               transform_l2c,
                               transform_p2c):
         """
-        Method to transform homogenous vertices by given transformations.
+        Class method to transform homogenous vertices
+        by given transformations.
         :param liver_data:
         :param transform_l2c: torch.Tensor
         :param transform_p2c: torch.Tensor
@@ -286,32 +288,12 @@ class LapVideoUS(nn.Module):
             - M_p2l_slicesampler
 
         """
-        # We pass some p2c and l2c into the renderer.
-        transform_p2c_perturbed = Transform3d(matrix=transform_p2c, device=self.device)
-        transform_l2c_perturbed = Transform3d(matrix=transform_l2c, device=self.device)
-        transform_c2l = transform_l2c_perturbed.inverse().to(self.device)
-
-        # Transform l2c OpenGL/PyTorch into P2L slicesampler for US slicing.
-        p2l_open_gl = transform_p2c_perturbed.compose(transform_c2l).get_matrix()
-        r_p2l, t_p2l = vru.split_opengl_hom_matrix(p2l_open_gl.to(self.device))
-        M_p2l_opencv, _, _ = vru.opengl_to_opencv_p2l(r_p2l.to(self.device), t_p2l.to(self.device), self.device)
-        r_p2l_cv, t_p2l_cv = vru.split_opencv_hom_matrix(M_p2l_opencv)
-        M_p2l_slicesampler = vru.p2l_2_slicesampler(M_p2l_opencv)
-
-        # Get c2l in cv space
-        r_c2l, t_c2l = vru.split_opengl_hom_matrix(transform_c2l.get_matrix().to(self.device))
-        M_c2l_opencv, _, _ = vru.opengl_to_opencv(r_c2l.to(self.device), t_c2l.to(self.device), self.device)
-        r_c2l_cv, t_c2l_cv = vru.split_opencv_hom_matrix(M_c2l_opencv)
-
-        # Slice for camera rendering
-        r_l2c, t_l2c = vru.split_opengl_hom_matrix(transform_l2c_perturbed.get_matrix())
-        # Generate probe meshes
-        verts_probe_unbatched = lvvmu.batch_verts_transformation(transform_c2l,
-                                                                 transform_p2c_perturbed,
-                                                                 liver_data[1][0],
-                                                                 self.batch,
-                                                                 self.device)
-        return verts_probe_unbatched, [r_l2c, t_l2c], [r_c2l, t_c2l], [r_p2l, t_p2l], M_p2l_slicesampler
+        outputs = lvrender.get_transformed_verts(liver_data,
+                                                 transform_l2c,
+                                                 transform_p2c,
+                                                 self.batch,
+                                                 self.device)
+        return outputs
 
     def render_data(self,
                     liver_data,
@@ -334,74 +316,22 @@ class LapVideoUS(nn.Module):
         :return: torch.Tensor for image and video data.
                     - (N, Ch_vid, H_vid, W_vid), 0:4 video, 4:7 US.
         """
-        verts_probe_unbatched, liver_transform, camera_transform, probe_transform, M_p2l_slicesampler =\
-            self.get_transformed_verts(liver_data, transform_l2c,transform_p2c)
-        r_l2c, t_l2c = liver_transform
-        r_c2l, t_c2l = camera_transform
-        r_p2l, t_p2l = probe_transform
-        verts_liver_unbatched = torch.split(liver_data[0][0],  [1 for i in range(self.batch)], 0)
-        faces_liver_unbatched = torch.split(liver_data[0][1],  [1 for i in range(self.batch)], 0)
-        faces_probe_unbatched = torch.split(liver_data[1][1],  [1 for i in range(self.batch)], 0)
-        # Create list of N meshes with both liver and probe.
-        batch_meshes = lvvmu.generate_composite_probe_and_liver_meshes(verts_liver_unbatched,
-                                                                       faces_liver_unbatched,
-                                                                       liver_data[0][2],
-                                                                       verts_probe_unbatched,
-                                                                       faces_probe_unbatched,
-                                                                       liver_data[1][2],
-                                                                       self.batch)
-        # Normalise in openCV space
-        t_p2l_norm = vru.global_to_local_space(t_p2l, self.bounds)
-        t_c2l_norm = vru.global_to_local_space(t_c2l, self.bounds)
+        image_tensor, labels = lvrender.render_scene(liver_data,
+                                        self.video_loader,
+                                        transform_l2c,
+                                        transform_p2c,
+                                        self.bounds,
+                                        self.us_dict,
+                                        self.us_dropout_params,
+                                        self.us_pad,
+                                        self.device,
+                                        us_noise,
+                                        video_noise,
+                                        self.alpha,
+                                        self.batch)
+        return image_tensor, labels
 
-        #### RENDERING
-        # Render image
-        image = self.video_loader.renderer(meshes_world=batch_meshes, R=r_l2c, T=t_l2c) # (N, B, W, Ch)
-        image = torch.transpose(image, 3, 1)
-        if video_noise:
-            if video_noise[0] is not None: # erosion
-                image = m.erosion(image, video_noise[0])
-            if video_noise[1] is not None: # dilation
-                image = m.dilation(image, video_noise[1])
-            if video_noise[2]: # dropout
-                pass
-
-        # Render US
-        # Base rendering objects - US
-        us = lvusg.slice_volume(self.us_dict["image_dim"],
-                                self.us_dict["pixel_size"],
-                                M_p2l_slicesampler,
-                                self.us_dict["voxel_size"],
-                                self.us_dict["origin"],
-                                self.us_dict["volume"],
-                                self.batch,
-                                self.device)
-        # Batch together, reshape US into correct output size.
-        # B, ch, 1, 68, 83
-        us = torch.squeeze(us, 2) # [N, ch, 68, 83]
-        if us_noise:
-            if us_noise[2] is not None: # dropout/delete vessels
-                us = lvisa.delete_channel_features(us,
-                                                   us_noise[2],
-                                                   self.us_dropout_params["num_iterations"],
-                                                   self.us_dropout_params["num_features_del"],
-                                                   self.us_dropout_params["min_size_features"],
-                                                   self.us_dropout_params["max_size_features"])
-            if us_noise[0] is not None: # erosion
-                us = m.erosion(us, us_noise[0])
-            if us_noise[1] is not None: # dilation
-                us = m.erosion(us, us_noise[1])
-
-        # Mask
-        us = us * self.us_dict["us_mask"]
-        us_pad = F.pad(us, self.us_pad) # (N, Ch, Out_size[0], Out_size[1])
-        if self.alpha is None:
-            # Get rid of the alpha channel in rendering.
-            image = image[:, 0:3, :, :]
-        image_tensor = torch.cat([image, torch.transpose(us_pad, 3, 2)], 1) # Cat along channels
-        return image_tensor, [t_c2l_norm, t_p2l_norm]
-
-    def post_process_predictions(self, c2l_q, c2l_t, p2l_q, p2l_t):
+    def post_process_predictions(self, quat, transl,):
         """
         Class method that defines how the data from predictions
         is post processed. We assume in this case that the rotations
@@ -417,16 +347,12 @@ class LapVideoUS(nn.Module):
         :return: List[Transform3d], (2,), c2l and p2l
         """
         # Convert quats to rot matrices
-        c2l_r = p3drc.quaternion_to_matrix(c2l_q)
-        p2l_r = p3drc.quaternion_to_matrix(p2l_q)
-        c2l_t_global = vru.local_to_global_space(c2l_t, self.bounds)
-        p2l_t_global = vru.local_to_global_space(p2l_t, self.bounds)
-        p2l_opengGL = vru.cat_opengl_hom_matrix(torch.transpose(p2l_r, 2, 1), p2l_t_global, self.device)
-        c2l_openGL = vru.cat_opengl_hom_matrix(torch.transpose(c2l_r, 2, 1), c2l_t_global, self.device)
+        rot = p3drc.quaternion_to_matrix(quat)
+        transl_g = vru.local_to_global_space(transl, self.bounds)
+        M_opengGL = vru.cat_opengl_hom_matrix(torch.transpose(rot, 2, 1), transl_g, self.device)
         # Return Transform3d
-        p2l_pytorch3d = Transform3d(matrix=p2l_opengGL, device=self.device)
-        c2l_pytorch3d = Transform3d(matrix=c2l_openGL, device=self.device)
-        return c2l_pytorch3d, p2l_pytorch3d
+        M_pytorch3d = Transform3d(matrix=M_opengGL, device=self.device)
+        return M_pytorch3d
 
     def forward(self, liver_data, image_data):
         """
@@ -488,14 +414,213 @@ class LapVideoUS(nn.Module):
             c2l_t, p2l_t = torch.split(out_branch_2, [3, 3], dim=1)
 
         # For translations we need a representation in bounded space
-        c2l_pytorch3d, p2l_pytorch3d = self.post_process_predictions(c2l_q=c2l_q,
-                                                                     c2l_t=c2l_t,
-                                                                     p2l_q=p2l_q,
-                                                                     p2l_t=p2l_t)
+        c2l_pytorch3d = self.post_process_predictions(quat=c2l_q,
+                                                      transl=c2l_t)
+        p2l_pytorch3d = self.post_process_predictions(quat=p2l_q,
+                                                      transl=p2l_t)
+
         transform_l2c_pred = c2l_pytorch3d.inverse()
         transform_p2c_pred = p2l_pytorch3d.compose(transform_l2c_pred)
-        tensor_pred, _ = self.render_data(liver_data=liver_data,
+        tensor_pred = self.render_data(liver_data=liver_data,
                                           transform_p2c=transform_p2c_pred.get_matrix(),
                                           transform_l2c=transform_l2c_pred.get_matrix())
         #### RETURN PRED IMAGE AND PRED TRANSFORMS
         return tensor_pred, [c2l_pytorch3d, p2l_pytorch3d], torch.cat((c2l_t, p2l_t), dim=1)
+
+class LapVideo(LapVideoUS):
+    """
+    Render video features separately
+    """
+    def render_data(self,
+                    liver_data,
+                    transform_l2c,
+                    video_noise=None):
+        """
+        """
+        image_liver = lvrender.render_vid(liver_data,
+                                          self.video_loader,
+                                          transform_l2c,
+                                          transform_p2c=None,
+                                          batch=self.batch,
+                                          video_noise=video_noise,
+                                          device=self.device)
+        return image_liver
+
+    def build_nn(self, image_size, model_config_dict):
+        """
+        Class method to build neural network.
+        Simple couple of convolutional layers with
+        FCNs at the end.
+        :param image_size:
+        """
+        print("Building Model...")
+        self.conv_backbone, self.conv_backbone_names = mu.parse_model_config_convs(model_config_dict["conv_backbone"])
+        self.branch1, self.branch1_names = mu.parse_model_config_linear(model_config_dict["branch1"])
+        self.fc1 = nn.Linear(**model_config_dict["fc1_layer"])
+        print("Model built.")
+
+    def forward(self, liver_data, image_data):
+        """
+        Defines forward pass.
+        Pass data through model.
+        Re-render calculated poses.
+        Calculate loss.
+        :param liver_data: List[List[torch.Tensor]], (2,), data for differentiable
+                           video rendering:
+                          - [verts_liver_batch, batch_faces_liver, batch_textures_liver]
+                          - [verts_probe_batch, batch_faces_probe, batch_textures_probe]
+        :param us_volume: torch.Tensor, (N, W, H, D,Ch)
+        :param data: torch.Tensor, (N, Ch, H, W),
+                     image from GT rendering.
+        :return: [loss_im, tensor_pred, norm_trans]
+        """
+        #### NETWORKS
+        # Backbone
+        out = image_data
+        for i, layer in enumerate(self.conv_backbone):
+            if self.conv_backbone_names[i] == "Conv2d":
+                out = F.leaky_relu(layer(out))
+            else: # Maxpool or BatchNorm
+                out = layer(out)
+
+        # Last conv layer, flatten and leaky relu
+        out = torch.flatten(out, start_dim=1)
+        out_branch_1 = F.leaky_relu(self.fc1(out))
+        # One branch
+        for i, layer in enumerate(self.branch1[:-1]):
+            if self.branch1_names[i] == "Linear":
+                out_branch_1 = F.leaky_relu(layer(out_branch_1))
+            else:
+                out_branch_1 = layer(out_branch_1)
+        # Last layer without an activation.
+        out_branch_1 = self.branch1[-1](out_branch_1)
+
+        #### POST PROCESS OUTPUTS - depending on architecture,
+        # split accordingly.
+        c2l_q, c2l_t = torch.split(out_branch_1, [4, 3], dim=1)
+
+        # For translations we need a representation in bounded space
+        # For translations we need a representation in bounded space
+        c2l_pytorch3d = self.post_process_predictions(quat=c2l_q,
+                                                      transl=c2l_t)
+
+        transform_l2c_pred = c2l_pytorch3d.inverse()
+        tensor_pred = self.render_data(liver_data=liver_data,
+                                       transform_l2c=transform_l2c_pred)
+        #### RETURN PRED IMAGE AND PRED TRANSFORMS
+        return tensor_pred, c2l_pytorch3d
+
+class LapUS(LapVideoUS):
+    """
+    Just render US.
+    """
+    def render_data(self,
+                    transform_p2l,
+                    us_noise=None):
+        """
+        """
+        r_p2l, t_p2l = vru.split_opengl_hom_matrix(transform_p2l.to(self.device))
+        M_p2l_opencv, _, _ = vru.opengl_to_opencv_p2l(r_p2l.to(self.device), t_p2l.to(self.device), self.device)
+        M_p2l_slicesampler = vru.p2l_2_slicesampler(M_p2l_opencv)
+        image_us = lvrender.render_us(M_p2l_slicesampler,
+                                      self.us_dict,
+                                      self.us_dropout_params,
+                                      self.us_pad,
+                                      self.device,
+                                      us_noise,
+                                      self.batch)
+        return image_us
+
+    def build_nn(self, image_size, model_config_dict):
+        """
+        Class method to build neural network.
+        Simple couple of convolutional layers with
+        FCNs at the end.
+        :param image_size:
+        """
+        print("Building Model...")
+        self.conv_backbone, self.conv_backbone_names = mu.parse_model_config_convs(model_config_dict["conv_backbone"])
+        self.branch1, self.branch1_names = mu.parse_model_config_linear(model_config_dict["branch1"])
+        self.fc1 = nn.Linear(**model_config_dict["fc1_layer"])
+        print("Model built.")
+
+    def forward(self, image_data):
+        """
+        Defines forward pass.
+        Pass data through model.
+        Re-render calculated poses.
+        Calculate loss.
+        :param liver_data: List[List[torch.Tensor]], (2,), data for differentiable
+                           video rendering:
+                          - [verts_liver_batch, batch_faces_liver, batch_textures_liver]
+                          - [verts_probe_batch, batch_faces_probe, batch_textures_probe]
+        :param us_volume: torch.Tensor, (N, W, H, D,Ch)
+        :param data: torch.Tensor, (N, Ch, H, W),
+                     image from GT rendering.
+        :return: [loss_im, tensor_pred, norm_trans]
+        """
+        #### NETWORKS
+        # Backbone
+        out = image_data
+        for i, layer in enumerate(self.conv_backbone):
+            if self.conv_backbone_names[i] == "Conv2d":
+                out = F.leaky_relu(layer(out))
+            else: # Maxpool or BatchNorm
+                out = layer(out)
+
+        # Last conv layer, flatten and leaky relu
+        out = torch.flatten(out, start_dim=1)
+        out_branch_1 = F.leaky_relu(self.fc1(out))
+        # One branch
+        for i, layer in enumerate(self.branch1[:-1]):
+            if self.branch1_names[i] == "Linear":
+                out_branch_1 = F.leaky_relu(layer(out_branch_1))
+            else:
+                out_branch_1 = layer(out_branch_1)
+        # Last layer without an activation.
+        out_branch_1 = self.branch1[-1](out_branch_1)
+
+        #### POST PROCESS OUTPUTS - depending on architecture,
+        # split accordingly.
+        p2l_q, p2l_t = torch.split(out_branch_1, [4, 3], dim=1)
+
+        p2l_pytorch3d = self.post_process_predictions(quat=p2l_q,
+                                                      transl=p2l_t)
+
+        tensor_pred = self.render_data(transform_p2l=p2l_pytorch3d.get_matrix())
+        #### RETURN PRED IMAGE AND PRED TRANSFORMS
+        return tensor_pred, p2l_pytorch3d
+
+class LapVideoUSSeparate(LapVideoUS):
+    """
+    Just render all features independently.
+    """
+    def render_data(self,
+                    liver_data,
+                    transform_l2c,
+                    transform_p2c,
+                    us_noise=None,
+                    video_noise=None):
+        """
+        """
+        transform_p2c_perturbed = Transform3d(matrix=transform_p2c, device=self.device)
+        transform_l2c_perturbed = Transform3d(matrix=transform_l2c, device=self.device)
+        M_p2l_slicesampler, _, _ = lvrender.get_mp2l_slicesampler(transform_l2c_perturbed,
+                                                                  transform_p2c_perturbed,
+                                                                  self.device)
+
+        image_us = lvrender.render_us(M_p2l_slicesampler,
+                                      self.us_dict,
+                                      self.us_dropout_params,
+                                      self.us_pad,
+                                      self.device,
+                                      us_noise,
+                                      self.batch)
+        image_liver, image_probe = lvrender.render_vid(liver_data,
+                                                       self.video_loader,
+                                                       transform_l2c_perturbed,
+                                                       transform_p2c_perturbed,
+                                                       self.batch,
+                                                       video_noise,
+                                                       self.device)
+        return image_liver, image_probe, image_us
